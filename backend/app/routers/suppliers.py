@@ -48,7 +48,7 @@ async def supplier_summary(supplier_id: str, profile: dict[str, Any] = Depends(c
     if not supplier:
         raise HTTPException(404, "المورد غير موجود")
     params = apply_branch_filter({
-        "select": "id,invoice_number,amount,paid_amount,balance,status,invoice_date,due_date,branch_id,branch_name",
+        "select": "id,invoice_number,amount,paid_amount,balance,status,invoice_date,due_date,notes,pdf_path,branch_id,branch_name",
         "supplier_id": f"eq.{supplier_id}", "order": "invoice_date.desc", "limit": "5000"
     }, profile)
     invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=params)
