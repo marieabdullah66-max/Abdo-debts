@@ -18,7 +18,7 @@ async def service_worker() -> FileResponse:
 
 @router.get("/health")
 async def health() -> dict[str, Any]:
-    return {"status": "ok", "service": "abdo-debts", "version": "1.0.0", "admin_api": bool(SUPABASE_SERVICE_ROLE_KEY)}
+    return {"status": "ok", "service": "abdo-debts", "version": "4.0.0", "admin_api": bool(SUPABASE_SERVICE_ROLE_KEY)}
 
 @router.get("/api/auth/accounts")
 async def login_accounts() -> Any:
