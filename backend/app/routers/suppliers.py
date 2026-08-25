@@ -4,14 +4,39 @@ from ..core import *
 router = APIRouter(prefix="/api/suppliers", tags=["suppliers"])
 
 @router.get("")
-async def list_suppliers(q: str | None = None, profile: dict[str, Any] = Depends(current_profile)) -> Any:
+async def list_suppliers(q: str | None = None, branch_id: str | None = None, include_balance: bool = False, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "view_suppliers")
     params = {"select": "id,name,phone,notes,active,created_at", "active": "eq.true", "order": "name.asc", "limit": "5000"}
     if q:
         safe = q.strip().replace("%", "")[:80]
         if safe:
             params["name"] = f"ilike.*{safe}*"
-    return await sb("GET", "/rest/v1/suppliers", service=True, params=params)
+    suppliers = await sb("GET", "/rest/v1/suppliers", service=True, params=params)
+    if not include_balance and not branch_id:
+        return suppliers
+
+    inv_params: dict[str, str] = {"select": "supplier_id,balance", "limit": "10000"}
+    inv_params = apply_branch_filter(inv_params, profile)
+    if branch_id:
+        require_branch_access(profile, branch_id)
+        inv_params["branch_id"] = f"eq.{branch_id}"
+    invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=inv_params)
+
+    balances: dict[str, float] = {}
+    suppliers_in_branch: set[str] = set()
+    for inv in invoices or []:
+        sid = inv.get("supplier_id")
+        if not sid:
+            continue
+        suppliers_in_branch.add(sid)
+        balances[sid] = balances.get(sid, 0.0) + float(inv.get("balance") or 0)
+
+    rows = []
+    for supplier in suppliers or []:
+        if branch_id and supplier.get("id") not in suppliers_in_branch:
+            continue
+        rows.append({**supplier, "balance": round(balances.get(supplier.get("id"), 0.0), 2)})
+    return rows
 
 @router.post("")
 async def create_supplier(data: SupplierInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:

@@ -1,4 +1,4 @@
-const VERSION = 'abdo-debts-v2';
+const VERSION = 'abdo-debts-v3';
 const STATIC_CACHE = `${VERSION}-static`;
 const APP_SHELL = ['/', '/assets/styles.css', '/assets/app.js', '/assets/manifest.webmanifest', '/assets/icons/icon-192.png', '/assets/icons/icon-512.png'];
 self.addEventListener('install', e => e.waitUntil(caches.open(STATIC_CACHE).then(c => c.addAll(APP_SHELL)).then(() => self.skipWaiting())));

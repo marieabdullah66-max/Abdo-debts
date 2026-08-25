@@ -5,7 +5,8 @@ const state = {
   accessToken: localStorage.getItem('debts_access') || '',
   refreshToken: localStorage.getItem('debts_refresh') || '',
   profile: null,
-  branches: [], suppliers: [], invoices: [], payments: [], users: [],
+  branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], users: [],
+  supplierBranchId: '',
   view: new URLSearchParams(location.search).get('view') || 'dashboard',
   supplierId: new URLSearchParams(location.search).get('supplier_id') || '',
 };
@@ -127,21 +128,38 @@ async function dashboardView(main){
 }
 
 async function suppliersView(main){
-  state.suppliers=await api('/api/suppliers');
-  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted">${state.suppliers.length} مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
-  <div class="toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."></div><div id="supplierRows"></div>`;
-  if(can('manage_suppliers'))document.getElementById('addSupplier').onclick=()=>supplierModal();
-  document.getElementById('supplierSearch').oninput=renderSupplierRows;renderSupplierRows();
+  const branchId=state.supplierBranchId||'';
+  state.supplierRows=await api(branchId?`/api/suppliers?include_balance=true&branch_id=${encodeURIComponent(branchId)}`:'/api/suppliers?include_balance=true');
+  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
+  <div class="toolbar supplier-toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."><select id="supplierBranchFilter" class="select">${branchOptions(true,false)}</select></div>
+  <div class="supplier-debt-total"><div><span>إجمالي الدين المتبقي</span><small id="supplierDebtScope">${branchId?'للفرع المحدد':'لكل الفروع'}</small></div><strong class="money" id="supplierDebtTotal">${money(state.supplierRows.reduce((sum,s)=>sum+Number(s.balance||0),0))}</strong></div>
+  <div id="supplierRows"></div>`;
+  const branchSelect=document.getElementById('supplierBranchFilter');branchSelect.value=branchId;
+  if(can('manage_suppliers'))document.getElementById('addSupplier').onclick=()=>supplierModal(null,async()=>refreshSupplierRows());
+  document.getElementById('supplierSearch').oninput=renderSupplierRows;
+  branchSelect.onchange=async()=>{state.supplierBranchId=branchSelect.value;await refreshSupplierRows();};
+  renderSupplierRows();
 }
-function renderSupplierRows(){const box=document.getElementById('supplierRows');if(!box)return;const q=(document.getElementById('supplierSearch')?.value||'').trim().toLowerCase();const rows=state.suppliers.filter(s=>!q||s.name.toLowerCase().includes(q));
+async function refreshSupplierRows(){
+  const branchId=state.supplierBranchId||'';
+  const box=document.getElementById('supplierRows');if(box)box.innerHTML='<div class="loading">جاري تحميل الموردين...</div>';
+  try{
+    state.supplierRows=await api(branchId?`/api/suppliers?include_balance=true&branch_id=${encodeURIComponent(branchId)}`:'/api/suppliers?include_balance=true');
+    const count=document.getElementById('supplierCount');if(count)count.textContent=state.supplierRows.length;
+    const total=document.getElementById('supplierDebtTotal');if(total)total.textContent=money(state.supplierRows.reduce((sum,s)=>sum+Number(s.balance||0),0));
+    const scope=document.getElementById('supplierDebtScope');if(scope)scope.textContent=branchId?'للفرع المحدد':'لكل الفروع';
+    renderSupplierRows();
+  }catch(e){if(box)box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;toast(e.message,true);}
+}
+function renderSupplierRows(){const box=document.getElementById('supplierRows');if(!box)return;const q=(document.getElementById('supplierSearch')?.value||'').trim().toLowerCase();const rows=state.supplierRows.filter(s=>!q||s.name.toLowerCase().includes(q));
   const actions=s=>`<button class="btn btn-primary btn-sm" data-open="${s.id}">فتح</button><button class="btn btn-soft btn-sm" data-summary="${s.id}">كشف</button>${can('manage_suppliers')?`<button class="btn btn-ghost btn-sm" data-edit="${s.id}">تعديل</button><button class="btn btn-danger btn-sm" data-delete="${s.id}">حذف</button>`:''}`;
-  box.innerHTML=`<div class="table-wrap desktop-table"><table><thead><tr><th>المورد</th><th>الهاتف</th><th>ملاحظات</th><th></th></tr></thead><tbody>${rows.map(s=>`<tr><td><strong>${esc(s.name)}</strong></td><td>${esc(s.phone||'-')}</td><td>${esc(s.notes||'-')}</td><td><div class="actions">${actions(s)}</div></td></tr>`).join('')}</tbody></table></div><div class="mobile-list">${rows.map(s=>`<div class="item-card"><div class="item-title"><span>${esc(s.name)}</span></div><div class="item-meta"><div><span>الهاتف</span>${esc(s.phone||'-')}</div><div><span>ملاحظات</span>${esc(s.notes||'-')}</div></div><div class="item-actions">${actions(s)}</div></div>`).join('')||'<div class="empty">لا توجد نتائج</div>'}</div>`;
+  box.innerHTML=`<div class="table-wrap desktop-table"><table><thead><tr><th>المورد</th><th>المتبقي</th><th>الهاتف</th><th>ملاحظات</th><th></th></tr></thead><tbody>${rows.map(s=>`<tr><td><strong>${esc(s.name)}</strong></td><td class="money supplier-balance-cell">${money(s.balance)}</td><td>${esc(s.phone||'-')}</td><td>${esc(s.notes||'-')}</td><td><div class="actions">${actions(s)}</div></td></tr>`).join('')}</tbody></table></div><div class="mobile-list">${rows.map(s=>`<div class="item-card"><div class="item-title supplier-item-title"><span>${esc(s.name)}</span><div class="supplier-mobile-balance"><small>المتبقي</small><strong class="money">${money(s.balance)}</strong></div></div><div class="item-meta"><div><span>الهاتف</span>${esc(s.phone||'-')}</div><div><span>ملاحظات</span>${esc(s.notes||'-')}</div></div><div class="item-actions">${actions(s)}</div></div>`).join('')||'<div class="empty">لا توجد نتائج</div>'}</div>`;
   box.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openSupplierPage(b.dataset.open));
   box.querySelectorAll('[data-summary]').forEach(b=>b.onclick=()=>supplierSummaryModal(b.dataset.summary));
-  box.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>supplierModal(state.suppliers.find(s=>s.id===b.dataset.edit)));
-  box.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف المورد؟'))return;try{await api(`/api/suppliers/${b.dataset.delete}`,{method:'DELETE'});toast('تم حذف المورد');await suppliersView(document.getElementById('main'));}catch(e){toast(e.message,true);}});
+  box.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>supplierModal(state.suppliers.find(s=>s.id===b.dataset.edit)||state.supplierRows.find(s=>s.id===b.dataset.edit),async()=>refreshSupplierRows()));
+  box.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف المورد؟'))return;try{await api(`/api/suppliers/${b.dataset.delete}`,{method:'DELETE'});state.suppliers=await api('/api/suppliers');toast('تم حذف المورد');await refreshSupplierRows();}catch(e){toast(e.message,true);}});
 }
-function supplierModal(s=null,onSaved=null){showModal(`${s?'تعديل':'إضافة'} مورد`,`<form id="supplierForm"><div class="field"><label>اسم المورد *</label><input class="input" name="name" required value="${esc(s?.name||'')}"></div><div class="field"><label>الهاتف</label><input class="input" name="phone" value="${esc(s?.phone||'')}"></div><div class="field"><label>ملاحظات</label><textarea class="textarea" name="notes">${esc(s?.notes||'')}</textarea></div></form>`,async()=>{const f=document.getElementById('supplierForm');if(!f.reportValidity())return false;const fd=new FormData(f);const payload={name:fd.get('name'),phone:fd.get('phone')||null,notes:fd.get('notes')||null};const saved=await api(s?`/api/suppliers/${s.id}`:'/api/suppliers',{method:s?'PUT':'POST',body:JSON.stringify(payload)});state.suppliers=await api('/api/suppliers');toast('تم حفظ المورد');if(onSaved)onSaved(saved);return true;});}
+function supplierModal(s=null,onSaved=null){showModal(`${s?'تعديل':'إضافة'} مورد`,`<form id="supplierForm"><div class="field"><label>اسم المورد *</label><input class="input" name="name" required value="${esc(s?.name||'')}"></div><div class="field"><label>الهاتف</label><input class="input" name="phone" value="${esc(s?.phone||'')}"></div><div class="field"><label>ملاحظات</label><textarea class="textarea" name="notes">${esc(s?.notes||'')}</textarea></div></form>`,async()=>{const f=document.getElementById('supplierForm');if(!f.reportValidity())return false;const fd=new FormData(f);const payload={name:fd.get('name'),phone:fd.get('phone')||null,notes:fd.get('notes')||null};const saved=await api(s?`/api/suppliers/${s.id}`:'/api/suppliers',{method:s?'PUT':'POST',body:JSON.stringify(payload)});state.suppliers=await api('/api/suppliers');toast('تم حفظ المورد');if(onSaved)await onSaved(saved);return true;});}
 async function supplierSummaryModal(id){try{const d=await api(`/api/suppliers/${id}/summary`);showModal(`كشف ${d.supplier.name}`,`<div class="supplier-summary"><div><small>الفواتير</small><strong>${money(d.totals.invoiced)}</strong></div><div><small>المسدد</small><strong>${money(d.totals.paid)}</strong></div><div><small>المتبقي</small><strong>${money(d.totals.balance)}</strong></div></div><h4>حسب الفروع</h4><div class="mini-list">${d.by_branch.map(x=>`<div class="mini-row"><span>${esc(x.branch_name)}</span><span class="money">${money(x.balance)}</span></div>`).join('')||'<div class="empty">لا توجد فواتير</div>'}</div><h4>الفواتير</h4><div class="allocation-list">${d.invoices.map(i=>`<div class="allocation-row" style="grid-template-columns:1fr 130px"><div class="desc"><strong>فاتورة ${esc(i.invoice_number)}</strong>${esc((i.branches||{}).name)} — ${esc(i.invoice_date)}</div><div>${statusBadge(i.status)}<div class="money">${money(i.balance)}</div></div></div>`).join('')}</div>`,null,{saveText:null,large:true});}catch(e){toast(e.message,true);}}
 
 
