@@ -237,6 +237,16 @@ class SupplierInput(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     phone: str | None = Field(default=None, max_length=50)
     notes: str | None = Field(default=None, max_length=1000)
+    category_ids: list[str] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def normalize_categories(self):
+        self.category_ids = list(dict.fromkeys(x.strip() for x in self.category_ids if x and x.strip()))
+        return self
+
+
+class SupplierCategoryInput(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
 
 
 class InvoiceInput(BaseModel):

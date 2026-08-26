@@ -3,6 +3,66 @@ from ..core import *
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
+
+@router.get("/supplier-categories")
+async def list_supplier_categories(profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    perms = effective_permissions(profile)
+    if not (perms.get("view_suppliers") or perms.get("manage_suppliers")):
+        raise HTTPException(403, "ليس لديك صلاحية عرض تصنيفات الموردين")
+    return await sb(
+        "GET", "/rest/v1/supplier_categories", service=True,
+        params={"select": "id,name,created_at", "order": "name.asc", "limit": "1000"},
+    )
+
+
+@router.post("/supplier-categories")
+async def create_supplier_category(data: SupplierCategoryInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    require_permission(profile, "manage_suppliers")
+    name = data.name.strip()
+    existing = await sb(
+        "GET", "/rest/v1/supplier_categories", service=True,
+        params={"select": "id", "name": f"eq.{name}", "limit": "1"},
+    )
+    if existing:
+        raise HTTPException(409, "يوجد تصنيف بنفس الاسم")
+    rows = await sb(
+        "POST", "/rest/v1/supplier_categories", service=True,
+        headers={"Prefer": "return=representation"}, json={"name": name},
+    )
+    return rows[0]
+
+
+@router.put("/supplier-categories/{category_id}")
+async def update_supplier_category(category_id: str, data: SupplierCategoryInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    require_permission(profile, "manage_suppliers")
+    name = data.name.strip()
+    existing = await sb(
+        "GET", "/rest/v1/supplier_categories", service=True,
+        params={"select": "id", "name": f"eq.{name}", "id": f"neq.{category_id}", "limit": "1"},
+    )
+    if existing:
+        raise HTTPException(409, "يوجد تصنيف بنفس الاسم")
+    rows = await sb(
+        "PATCH", "/rest/v1/supplier_categories", service=True,
+        headers={"Prefer": "return=representation"}, params={"id": f"eq.{category_id}"}, json={"name": name},
+    )
+    if not rows:
+        raise HTTPException(404, "التصنيف غير موجود")
+    return rows[0]
+
+
+@router.delete("/supplier-categories/{category_id}")
+async def delete_supplier_category(category_id: str, profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    require_permission(profile, "manage_suppliers")
+    linked = await sb(
+        "GET", "/rest/v1/supplier_category_links", service=True,
+        params={"select": "supplier_id", "category_id": f"eq.{category_id}", "limit": "1"},
+    )
+    if linked:
+        raise HTTPException(409, "لا يمكن حذف التصنيف لأنه مرتبط بموردين؛ أزل التصنيف من الموردين أولًا")
+    await sb("DELETE", "/rest/v1/supplier_categories", service=True, params={"id": f"eq.{category_id}"})
+    return {"ok": True}
+
 @router.get("/branches")
 async def list_branches(profile: dict[str, Any] = Depends(current_profile)) -> Any:
     # Everyone needs the names of branches they can use; managers get all branches.
