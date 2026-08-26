@@ -7,7 +7,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 @router.get("/supplier-categories")
 async def list_supplier_categories(profile: dict[str, Any] = Depends(current_profile)) -> Any:
     perms = effective_permissions(profile)
-    if not (perms.get("view_suppliers") or perms.get("manage_suppliers")):
+    if not (perms.get("view_dashboard") or perms.get("view_suppliers") or perms.get("manage_suppliers")):
         raise HTTPException(403, "ليس لديك صلاحية عرض تصنيفات الموردين")
     return await sb(
         "GET", "/rest/v1/supplier_categories", service=True,

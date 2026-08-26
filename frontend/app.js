@@ -8,6 +8,11 @@ const state = {
   branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], users: [], categories: [],
   supplierBranchId: '',
   supplierCategoryId: '',
+  dashboardBranchId: '',
+  dashboardCategoryId: '',
+  dashboardPeriod: 'all',
+  dashboardFromDate: '',
+  dashboardToDate: '',
   view: new URLSearchParams(location.search).get('view') || 'dashboard',
   supplierId: new URLSearchParams(location.search).get('supplier_id') || '',
 };
@@ -61,10 +66,8 @@ async function bootstrap(){
 }
 async function loadBase(){
   const jobs=[api('/api/admin/branches').then(x=>state.branches=x||[])];
-  if(can('view_suppliers')){
-    jobs.push(api('/api/suppliers').then(x=>state.suppliers=x||[]));
-    jobs.push(api('/api/admin/supplier-categories').then(x=>state.categories=x||[]));
-  }
+  if(can('view_suppliers')) jobs.push(api('/api/suppliers').then(x=>state.suppliers=x||[]));
+  if(can('view_dashboard') || can('view_suppliers')) jobs.push(api('/api/admin/supplier-categories').then(x=>state.categories=x||[]));
   await Promise.all(jobs);
 }
 
@@ -124,19 +127,49 @@ function paymentMethod(p){return p.method==='bank'?`🏦 ${esc(p.bank_name||'م�
 function categoryTags(categories=[]){return categories.length?`<div class="category-tags">${categories.map(c=>`<span class="category-tag">${esc(c.name)}</span>`).join('')}</div>`:'<span class="muted">بدون تصنيف</span>';}
 
 async function dashboardView(main){
-  const data=await api('/api/dashboard');
   main.innerHTML=`<div class="page-head"><div><h2>الرئيسية</h2><div class="muted">نظرة سريعة على المديونيات الحالية</div></div></div>
-  <div class="cards">
-    <div class="stat"><div class="label">إجمالي الفواتير</div><div class="value">${money(data.totals.invoiced)}</div></div>
-    <div class="stat"><div class="label">إجمالي المسدد</div><div class="value">${money(data.totals.paid)}</div></div>
-    <div class="stat"><div class="label">إجمالي المتبقي</div><div class="value">${money(data.totals.balance)}</div></div>
-    <div class="stat"><div class="label">المتأخر</div><div class="value">${money(data.totals.overdue)}</div><div class="sub">حسب تاريخ الاستحقاق</div></div>
-  </div>
-  <div class="grid-2"><section class="panel"><h3>حالة الفواتير</h3><div class="mini-list">
-    <div class="mini-row"><span>🔴 غير مسددة</span><strong>${data.counts.unpaid||0}</strong></div><div class="mini-row"><span>🟡 مسددة جزئيًا</span><strong>${data.counts.partial||0}</strong></div><div class="mini-row"><span>🟢 مسددة بالكامل</span><strong>${data.counts.paid||0}</strong></div>
-    <div class="mini-row"><span>💵 نقدي هذا الشهر</span><strong class="money">${money(data.month_payments.cash)}</strong></div><div class="mini-row"><span>🏦 مصرف هذا الشهر</span><strong class="money">${money(data.month_payments.bank)}</strong></div></div></section>
-    <section class="panel"><h3>أعلى الموردين مديونية</h3><div class="mini-list">${data.top_suppliers.length?data.top_suppliers.map(x=>`<div class="mini-row"><span>${esc(x.name)}</span><strong class="money">${money(x.balance)}</strong></div>`).join(''):'<div class="empty">لا توجد بيانات</div>'}</div></section></div>
-  <section class="panel" style="margin-top:14px"><h3>المديونية حسب الفروع</h3><div class="mini-list">${data.branches.length?data.branches.map(x=>`<div class="mini-row"><span>${esc(x.name)}</span><strong class="money">${money(x.balance)}</strong></div>`).join(''):'<div class="empty">لا توجد بيانات</div>'}</div></section>`;
+  <section class="dashboard-filter-panel">
+    <div class="dashboard-filters">
+      <div class="field dashboard-filter-field"><label>الفرع</label><select class="select" id="dashboardBranch">${branchOptions(true,false)}</select></div>
+      <div class="field dashboard-filter-field"><label>التصنيف</label><select class="select" id="dashboardCategory"><option value="">كل التصنيفات</option>${state.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+      <div class="field dashboard-filter-field"><label>الفترة</label><select class="select" id="dashboardPeriod"><option value="all">كل الوقت</option><option value="this_month">هذا الشهر</option><option value="last_month">الشهر الماضي</option><option value="custom">فترة مخصصة</option></select></div>
+    </div>
+    <div class="dashboard-custom-dates hidden" id="dashboardCustomDates">
+      <div class="field"><label>من تاريخ</label><input class="input" type="date" id="dashboardFromDate"></div>
+      <div class="field"><label>إلى تاريخ</label><input class="input" type="date" id="dashboardToDate"></div>
+    </div>
+    <div class="dashboard-filter-summary" id="dashboardFilterSummary"></div>
+  </section>
+  <div id="dashboardResults"><div class="loading">جاري تحميل البيانات...</div></div>`;
+
+  const branch=document.getElementById('dashboardBranch'),category=document.getElementById('dashboardCategory'),period=document.getElementById('dashboardPeriod'),from=document.getElementById('dashboardFromDate'),to=document.getElementById('dashboardToDate'),custom=document.getElementById('dashboardCustomDates');
+  branch.value=state.dashboardBranchId||'';category.value=state.dashboardCategoryId||'';period.value=state.dashboardPeriod||'all';from.value=state.dashboardFromDate||'';to.value=state.dashboardToDate||'';
+  const syncCustom=()=>custom.classList.toggle('hidden',period.value!=='custom');
+  const refresh=async()=>{
+    state.dashboardBranchId=branch.value;state.dashboardCategoryId=category.value;state.dashboardPeriod=period.value;state.dashboardFromDate=from.value;state.dashboardToDate=to.value;syncCustom();
+    await refreshDashboardResults();
+  };
+  branch.onchange=refresh;category.onchange=refresh;period.onchange=refresh;from.onchange=refresh;to.onchange=refresh;syncCustom();await refreshDashboardResults();
+}
+function dashboardPeriodLabel(){return ({all:'كل الوقت',this_month:'هذا الشهر',last_month:'الشهر الماضي',custom:'الفترة المخصصة'})[state.dashboardPeriod||'all']||'كل الوقت';}
+async function refreshDashboardResults(){
+  const box=document.getElementById('dashboardResults');if(!box)return;box.innerHTML='<div class="loading">جاري تحديث الرئيسية...</div>';
+  const q=new URLSearchParams();if(state.dashboardBranchId)q.set('branch_id',state.dashboardBranchId);if(state.dashboardCategoryId)q.set('category_id',state.dashboardCategoryId);q.set('period',state.dashboardPeriod||'all');if(state.dashboardPeriod==='custom'){if(state.dashboardFromDate)q.set('from_date',state.dashboardFromDate);if(state.dashboardToDate)q.set('to_date',state.dashboardToDate);}
+  try{
+    const data=await api(`/api/dashboard?${q.toString()}`),paymentLabel=dashboardPeriodLabel(),branch=state.branches.find(b=>b.id===state.dashboardBranchId),category=state.categories.find(c=>c.id===state.dashboardCategoryId),summary=document.getElementById('dashboardFilterSummary');
+    if(summary)summary.innerHTML=`<span>العرض الحالي:</span><strong>${esc(branch?.name||'كل الفروع')}</strong><span>·</span><strong>${esc(category?.name||'كل التصنيفات')}</strong><span>·</span><strong>${esc(paymentLabel)}</strong>${state.dashboardPeriod==='custom'&&(state.dashboardFromDate||state.dashboardToDate)?`<small>${esc(state.dashboardFromDate||'البداية')} ← ${esc(state.dashboardToDate||'اليوم')}</small>`:''}`;
+    box.innerHTML=`<div class="cards">
+      <div class="stat"><div class="label">إجمالي الفواتير</div><div class="value">${money(data.totals.invoiced)}</div></div>
+      <div class="stat"><div class="label">إجمالي المسدد</div><div class="value">${money(data.totals.paid)}</div></div>
+      <div class="stat"><div class="label">إجمالي المتبقي</div><div class="value">${money(data.totals.balance)}</div></div>
+      <div class="stat"><div class="label">المتأخر</div><div class="value">${money(data.totals.overdue)}</div><div class="sub">حسب تاريخ الاستحقاق</div></div>
+    </div>
+    <div class="grid-2"><section class="panel"><h3>حالة الفواتير</h3><div class="mini-list">
+      <div class="mini-row"><span>🔴 غير مسددة</span><strong>${data.counts.unpaid||0}</strong></div><div class="mini-row"><span>🟡 مسددة جزئيًا</span><strong>${data.counts.partial||0}</strong></div><div class="mini-row"><span>🟢 مسددة بالكامل</span><strong>${data.counts.paid||0}</strong></div>
+      <div class="mini-row"><span>💵 نقدي — ${esc(paymentLabel)}</span><strong class="money">${money((data.period_payments||data.month_payments||{}).cash)}</strong></div><div class="mini-row"><span>🏦 مصرف — ${esc(paymentLabel)}</span><strong class="money">${money((data.period_payments||data.month_payments||{}).bank)}</strong></div></div></section>
+      <section class="panel"><h3>أعلى الموردين مديونية</h3><div class="mini-list">${data.top_suppliers.length?data.top_suppliers.map(x=>`<div class="mini-row"><span>${esc(x.name)}</span><strong class="money">${money(x.balance)}</strong></div>`).join(''):'<div class="empty">لا توجد بيانات</div>'}</div></section></div>
+    <section class="panel" style="margin-top:14px"><h3>المديونية حسب الفروع</h3><div class="mini-list">${data.branches.length?data.branches.map(x=>`<div class="mini-row"><span>${esc(x.name)}</span><strong class="money">${money(x.balance)}</strong></div>`).join(''):'<div class="empty">لا توجد بيانات</div>'}</div></section>`;
+  }catch(e){box.innerHTML=`<div class="panel"><div class="empty">${esc(e.message)}</div></div>`;toast(e.message,true);}
 }
 
 async function suppliersView(main){
