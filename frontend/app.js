@@ -6,7 +6,7 @@ const state = {
   refreshToken: localStorage.getItem('debts_refresh') || '',
   profile: null,
   branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], paymentPlans: [], users: [], categories: [], items: [], notifications: [],
-  notificationUnread: 0, notificationTimer: null,
+  notificationUnread: 0, notificationTimer: null, authRefreshTimer: null,
   supplierBranchId: '',
   supplierCategoryId: '',
   dashboardBranchId: '',
@@ -44,23 +44,111 @@ function isoToday(){const d=new Date(),local=new Date(d.getTime()-d.getTimezoneO
 function can(p){return !!state.profile?.effective_permissions?.[p];}
 function toast(msg, error=false){toastEl.textContent=msg;toastEl.className=`toast show${error?' error':''}`;clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.className='toast',2800);}
 function confirmAction(msg){return window.confirm(msg);}
+let authRefreshPromise = null;
+let sessionExpiredShown = false;
+
+function decodeJwtPayload(token){
+  try{
+    const part=String(token||'').split('.')[1];
+    if(!part)return null;
+    const normalized=part.replace(/-/g,'+').replace(/_/g,'/');
+    const padded=normalized+'='.repeat((4-normalized.length%4)%4);
+    const json=decodeURIComponent(Array.from(atob(padded)).map(c=>`%${c.charCodeAt(0).toString(16).padStart(2,'0')}`).join(''));
+    return JSON.parse(json);
+  }catch{return null;}
+}
+function accessTokenExpiresInMs(){
+  const exp=Number(decodeJwtPayload(state.accessToken)?.exp||0);
+  return exp ? exp*1000-Date.now() : null;
+}
+function accessTokenNeedsRefresh(bufferMs=60000){
+  const left=accessTokenExpiresInMs();
+  return left!==null && left<=bufferMs;
+}
+function stopAuthRefreshTimer(){if(state.authRefreshTimer)clearTimeout(state.authRefreshTimer);state.authRefreshTimer=null;}
+function scheduleAuthRefresh(){
+  stopAuthRefreshTimer();
+  if(!state.accessToken||!state.refreshToken)return;
+  const left=accessTokenExpiresInMs();
+  if(left===null)return;
+  const delay=Math.max(5000,left-60000);
+  state.authRefreshTimer=setTimeout(()=>refreshSession(true),delay);
+}
 function setTokens(data){
   state.accessToken=data.access_token||''; state.refreshToken=data.refresh_token||state.refreshToken||'';
-  localStorage.setItem('debts_access',state.accessToken); if(state.refreshToken)localStorage.setItem('debts_refresh',state.refreshToken);
+  if(state.accessToken)localStorage.setItem('debts_access',state.accessToken);else localStorage.removeItem('debts_access');
+  if(state.refreshToken)localStorage.setItem('debts_refresh',state.refreshToken);else localStorage.removeItem('debts_refresh');
+  sessionExpiredShown=false;
+  scheduleAuthRefresh();
 }
-function logout(){if(state.notificationTimer)clearInterval(state.notificationTimer);state.notificationTimer=null;localStorage.removeItem('debts_access');localStorage.removeItem('debts_refresh');state.accessToken='';state.refreshToken='';state.profile=null;renderLogin();}
+function clearSession(){
+  if(state.notificationTimer)clearInterval(state.notificationTimer);state.notificationTimer=null;
+  stopAuthRefreshTimer();
+  localStorage.removeItem('debts_access');localStorage.removeItem('debts_refresh');
+  state.accessToken='';state.refreshToken='';state.profile=null;
+}
+function logout(){clearSession();sessionExpiredShown=false;renderLogin();}
+function expireSession(){
+  clearSession();
+  renderLogin();
+  if(!sessionExpiredShown){sessionExpiredShown=true;toast('انتهت الجلسة. سجل الدخول من جديد.',true);}
+}
+function isSessionTokenError(status,msg=''){
+  const text=String(msg||'').toLowerCase();
+  if(status===401)return true;
+  if(status!==403)return false;
+  return /invalid jwt|jwt.*expired|token.*expired|token is expired|invalid claims|unable to parse or verify signature|session.*expired/.test(text);
+}
+async function refreshSession(showLoginOnFailure=true){
+  if(!state.refreshToken){if(showLoginOnFailure)expireSession();return false;}
+  if(authRefreshPromise)return authRefreshPromise;
+  authRefreshPromise=(async()=>{
+    try{
+      const rr=await fetch('/api/auth/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refresh_token:state.refreshToken}),cache:'no-store'});
+      if(!rr.ok){
+        if([400,401,403].includes(rr.status))expireSession();
+        return false;
+      }
+      const data=await rr.json();
+      if(!data?.access_token){expireSession();return false;}
+      setTokens(data);
+      return true;
+    }catch{
+      // A temporary network problem is not the same as an expired session.
+      scheduleAuthRefresh();
+      return false;
+    }finally{authRefreshPromise=null;}
+  })();
+  return authRefreshPromise;
+}
+async function responseError(res){
+  let msg=`خطأ ${res.status}`;
+  try{const j=await res.clone().json();msg=j.detail||j.message||j.error_description||j.msg||msg;}catch{try{msg=await res.clone().text()||msg;}catch{}}
+  return typeof msg==='string'?msg:JSON.stringify(msg);
+}
 
 async function api(path, options={}, retry=true){
+  const authRequest=!path.startsWith('/api/auth/');
+  if(authRequest && retry && state.refreshToken && (!state.accessToken || accessTokenNeedsRefresh())){
+    await refreshSession(false);
+  }
   const headers={...(options.headers||{})};
   if(state.accessToken)headers.Authorization=`Bearer ${state.accessToken}`;
   if(options.body && !(options.body instanceof FormData))headers['Content-Type']='application/json';
   const res=await fetch(path,{...options,headers});
-  if(res.status===401 && retry && state.refreshToken){
-    const rr=await fetch('/api/auth/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refresh_token:state.refreshToken})});
-    if(rr.ok){setTokens(await rr.json());return api(path,options,false);}
-    logout(); throw new Error('انتهت الجلسة');
+  if(!res.ok){
+    const msg=await responseError(res);
+    if(authRequest && retry && state.refreshToken && isSessionTokenError(res.status,msg)){
+      const refreshed=await refreshSession(true);
+      if(refreshed)return api(path,options,false);
+      throw new Error('انتهت الجلسة. سجل الدخول من جديد.');
+    }
+    if(authRequest && isSessionTokenError(res.status,msg)){
+      expireSession();
+      throw new Error('انتهت الجلسة. سجل الدخول من جديد.');
+    }
+    throw new Error(msg);
   }
-  if(!res.ok){let msg=`خطأ ${res.status}`;try{const j=await res.json();msg=j.detail||j.message||msg;}catch{msg=await res.text()||msg;}throw new Error(typeof msg==='string'?msg:JSON.stringify(msg));}
   const ct=res.headers.get('content-type')||'';return ct.includes('json')?res.json():res;
 }
 
@@ -86,11 +174,12 @@ async function openNotifications(){
 }
 
 async function bootstrap(){
+  if(!state.accessToken && state.refreshToken)await refreshSession(false);
   if(!state.accessToken)return renderLogin();
   try{
     state.profile=await api('/api/me');
-    await loadBase(); await loadNotifications(true); renderApp(); startNotificationPolling();
-  }catch(e){logout();}
+    await loadBase(); await loadNotifications(true); renderApp(); startNotificationPolling(); scheduleAuthRefresh();
+  }catch(e){if(state.accessToken)logout();}
 }
 async function loadBase(){
   const jobs=[api('/api/admin/branches').then(x=>state.branches=x||[])];

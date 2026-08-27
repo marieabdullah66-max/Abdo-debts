@@ -123,6 +123,19 @@ async def sb(method: str, path: str, token: str | None = None, *, service: bool 
     return response.json() if "json" in ctype else response.content
 
 
+
+
+def is_expired_jwt_error(exc: HTTPException) -> bool:
+    text = str(exc.detail or "").lower()
+    return exc.status_code in (401, 403) and any(marker in text for marker in (
+        "invalid jwt",
+        "token is expired",
+        "token expired",
+        "invalid claims",
+        "unable to parse or verify signature",
+        "jwt expired",
+    ))
+
 def bearer(authorization: str | None = Header(default=None)) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "يلزم تسجيل الدخول")
@@ -153,7 +166,12 @@ async def profile_for_token(token: str) -> dict[str, Any]:
     if cached and cached[1] > now:
         return dict(cached[0])
 
-    user = await sb("GET", "/auth/v1/user", token)
+    try:
+        user = await sb("GET", "/auth/v1/user", token)
+    except HTTPException as exc:
+        if is_expired_jwt_error(exc):
+            raise HTTPException(401, "انتهت صلاحية الجلسة") from exc
+        raise
     uid = user.get("id")
     if not uid:
         raise HTTPException(401, "جلسة الدخول غير صالحة")

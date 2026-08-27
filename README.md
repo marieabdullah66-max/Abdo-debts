@@ -63,3 +63,10 @@ python run.py
 - التقارير المتقدمة وPDF/Excel لكشوف الحساب مؤجلة للإصدار التالي عند تحديد تفاصيلها.
 - حذف فاتورة عليها سداد ممنوع؛ يجب تعديل/حذف السداد أولًا لحماية الأرصدة.
 - حذف فرع مرتبط ببيانات ممنوع؛ يمكن إيقافه بدلًا من ذلك.
+
+## V14 - Session reliability
+- Automatic access-token refresh before expiry.
+- Handles expired JWT responses returned as either 401 or 403.
+- Deduplicates concurrent refresh requests.
+- Prevents raw Supabase JWT errors from appearing in the UI.
+- No database migration is required for V14.
