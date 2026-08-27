@@ -35,6 +35,7 @@ PERMISSION_KEYS = {
     "view_invoices", "create_invoices", "edit_invoices", "delete_invoices",
     "view_payments", "create_payments", "edit_payments", "delete_payments",
     "manage_branches", "manage_users", "view_reports",
+    "view_item_analysis", "manage_item_catalog",
 }
 
 ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
@@ -50,6 +51,8 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
         "create_payments": True,
         "edit_payments": True,
         "view_reports": True,
+        "view_item_analysis": True,
+        "manage_item_catalog": True,
     },
     "viewer": {
         "view_dashboard": True,
@@ -57,6 +60,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
         "view_invoices": True,
         "view_payments": True,
         "view_reports": True,
+        "view_item_analysis": True,
     },
 }
 
@@ -231,6 +235,13 @@ class BranchInput(BaseModel):
 class BranchUpdateInput(BaseModel):
     name: str = Field(min_length=2, max_length=100)
     active: bool = True
+
+
+class ItemInput(BaseModel):
+    item_code: str = Field(min_length=1, max_length=160)
+    item_name: str = Field(min_length=1, max_length=240)
+    package_form: str | None = Field(default=None, max_length=120)
+    units_per_box: int = Field(gt=0, le=100000)
 
 
 class SupplierInput(BaseModel):

@@ -50,6 +50,19 @@ create table if not exists public.supplier_category_links (
 );
 create index if not exists supplier_category_links_category_idx on public.supplier_category_links(category_id);
 
+
+create table if not exists public.item_catalog (
+  id uuid primary key default gen_random_uuid(),
+  item_code text not null unique,
+  item_name text not null,
+  package_form text,
+  units_per_box integer not null check (units_per_box > 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists item_catalog_name_idx on public.item_catalog using btree (lower(item_name));
+create index if not exists item_catalog_code_idx on public.item_catalog(item_code);
+
 create table if not exists public.invoices (
   id uuid primary key default gen_random_uuid(),
   supplier_id uuid not null references public.suppliers(id) on delete restrict,
@@ -238,6 +251,7 @@ alter table public.supplier_category_links enable row level security;
 alter table public.invoices enable row level security;
 alter table public.payments enable row level security;
 alter table public.payment_allocations enable row level security;
+alter table public.item_catalog enable row level security;
 
 -- Private bucket for the original invoice PDF attachment (max enforced again in API).
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -247,7 +261,7 @@ on conflict (id) do update set public=false, file_size_limit=10485760, allowed_m
 -- Do not expose financial data directly through the public Supabase API roles.
 revoke all on table public.branches, public.profiles, public.profile_branches, public.suppliers,
   public.supplier_categories, public.supplier_category_links, public.invoices, public.payments,
-  public.payment_allocations from anon, authenticated;
+  public.payment_allocations, public.item_catalog from anon, authenticated;
 revoke all on table public.invoice_balances from anon, authenticated;
 revoke execute on function public.create_payment_with_allocations(uuid,uuid,numeric,date,text,text,text,uuid,jsonb) from public, anon, authenticated;
 revoke execute on function public.update_payment_with_allocations(uuid,uuid,uuid,numeric,date,text,text,text,jsonb) from public, anon, authenticated;

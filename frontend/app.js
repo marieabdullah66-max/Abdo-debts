@@ -5,7 +5,7 @@ const state = {
   accessToken: localStorage.getItem('debts_access') || '',
   refreshToken: localStorage.getItem('debts_refresh') || '',
   profile: null,
-  branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], users: [], categories: [],
+  branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], users: [], categories: [], items: [],
   supplierBranchId: '',
   supplierCategoryId: '',
   dashboardBranchId: '',
@@ -13,6 +13,7 @@ const state = {
   dashboardPeriod: 'all',
   dashboardFromDate: '',
   dashboardToDate: '',
+  itemsTab: 'catalog',
   view: new URLSearchParams(location.search).get('view') || 'dashboard',
   supplierId: new URLSearchParams(location.search).get('supplier_id') || '',
 };
@@ -21,13 +22,14 @@ const PERMISSION_LABELS = {
   view_dashboard:'عرض الرئيسية', view_suppliers:'عرض الموردين', manage_suppliers:'إدارة الموردين',
   view_invoices:'عرض الفواتير', create_invoices:'إضافة فاتورة', edit_invoices:'تعديل الفاتورة', delete_invoices:'حذف الفاتورة',
   view_payments:'عرض السدادات', create_payments:'إضافة سداد', edit_payments:'تعديل السداد', delete_payments:'حذف السداد',
-  manage_branches:'إدارة الفروع', manage_users:'إدارة المستخدمين', view_reports:'عرض التقارير'
+  manage_branches:'إدارة الفروع', manage_users:'إدارة المستخدمين', view_reports:'عرض التقارير',
+  view_item_analysis:'عرض حركة الأصناف', manage_item_catalog:'إدارة دليل الأصناف'
 };
 const ROLE_LABELS = {admin:'مدير', finance:'مالي', viewer:'مشاهدة فقط'};
 const ROLE_DEFAULTS = {
   admin: Object.fromEntries(Object.keys(PERMISSION_LABELS).map(k=>[k,true])),
-  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true},
-  viewer: {view_dashboard:true,view_suppliers:true,view_invoices:true,view_payments:true,view_reports:true}
+  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true},
+  viewer: {view_dashboard:true,view_suppliers:true,view_invoices:true,view_payments:true,view_reports:true,view_item_analysis:true}
 };
 const STATUS_LABELS = {unpaid:'غير مسددة', partial:'جزئي', paid:'مسددة'};
 
@@ -95,13 +97,13 @@ function syncStickyOffsets(){
 }
 function renderApp(){
   if(!state.profile)return renderLogin();
-  const allowedViews={dashboard:'view_dashboard',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',settings:null};
+  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',settings:null};
   if(allowedViews[state.view] && !can(allowedViews[state.view])) state.view=can('view_dashboard')?'dashboard':can('view_invoices')?'invoices':'settings';
   const settingsVisible=can('manage_branches')||can('manage_suppliers')||can('manage_users');
   root.innerHTML=`<div class="app">
     <header class="topbar"><div class="topbar-inner"><div class="top-title"><div>💰</div><div><strong>Abdo Debts</strong><small>نظام المديونيات</small></div></div><div class="user-box"><span class="user-name">${esc(state.profile.full_name)}</span><button class="btn btn-ghost btn-sm" id="logoutBtn">خروج</button></div></div></header>
     <main class="main" id="main"></main>
-    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
+    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
   </div>`;
   document.getElementById('logoutBtn').onclick=logout;
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
@@ -113,6 +115,7 @@ function go(view){state.view=view;if(view!=='supplier')state.supplierId='';const
 function openSupplierPage(id){state.view='supplier';state.supplierId=id;const u=new URL(location.href);u.searchParams.set('view','supplier');u.searchParams.set('supplier_id',id);history.pushState({},'',u);renderApp();}
 async function renderView(){const main=document.getElementById('main');main.innerHTML='<div class="loading">جاري التحميل...</div>';try{
   if(state.view==='dashboard')await dashboardView(main);
+  else if(state.view==='items')await itemsView(main);
   else if(state.view==='suppliers')await suppliersView(main);
   else if(state.view==='supplier')await supplierDetailView(main);
   else if(state.view==='invoices')await invoicesView(main);
@@ -170,6 +173,66 @@ async function refreshDashboardResults(){
       <section class="panel"><h3>أعلى الموردين مديونية</h3><div class="mini-list">${data.top_suppliers.length?data.top_suppliers.map(x=>`<div class="mini-row"><span>${esc(x.name)}</span><strong class="money">${money(x.balance)}</strong></div>`).join(''):'<div class="empty">لا توجد بيانات</div>'}</div></section></div>
     <section class="panel" style="margin-top:14px"><h3>المديونية حسب الفروع</h3><div class="mini-list">${data.branches.length?data.branches.map(x=>`<div class="mini-row"><span>${esc(x.name)}</span><strong class="money">${money(x.balance)}</strong></div>`).join(''):'<div class="empty">لا توجد بيانات</div>'}</div></section>`;
   }catch(e){box.innerHTML=`<div class="panel"><div class="empty">${esc(e.message)}</div></div>`;toast(e.message,true);}
+}
+
+
+async function itemsView(main){
+  main.innerHTML=`<div class="page-head"><div><h2>حركة الأصناف</h2><div class="muted">قسم مستقل عن الموردين والفواتير والسدادات</div></div></div>
+  <section class="items-module-banner"><strong>دليل الأصناف هو المرجع الأساسي</strong><span>الكود + اسم الصنف + شكل التعبئة + عدد الفرط في العلبة</span></section>
+  <div class="settings-tabs items-tabs"><button class="btn btn-ghost ${state.itemsTab==='catalog'?'active':''}" data-items-tab="catalog">دليل الأصناف</button><button class="btn btn-ghost ${state.itemsTab==='analysis'?'active':''}" data-items-tab="analysis">تحليل الحركة</button></div>
+  <div id="itemsTabBox"></div>`;
+  main.querySelectorAll('[data-items-tab]').forEach(b=>b.onclick=()=>{state.itemsTab=b.dataset.itemsTab;itemsView(main);});
+  await renderItemsTab();
+}
+
+async function renderItemsTab(){
+  const box=document.getElementById('itemsTabBox');if(!box)return;
+  if(state.itemsTab==='analysis'){
+    box.innerHTML=`<section class="panel movement-coming"><h3>تحليل حركة الأصناف</h3><p>هذا الجزء جاهز للربط بتقرير حركة الشهر بعد ما نشوف شكل التقرير الحقيقي.</p><div class="formula-card"><small>الحساب المتفق عليه</small><strong>العلب المكافئة = العلب المباعة + (الفرط المباع ÷ الفرط في العلبة)</strong><strong>معدل البيع اليومي = العلب المكافئة ÷ عدد أيام الشهر</strong></div><div class="hint">لن نربط تقرير الحركة أو نفترض أسماء أعمدته قبل مراجعة ملف فعلي.</div></section>`;
+    return;
+  }
+  box.innerHTML='<div class="loading">جاري تحميل دليل الأصناف...</div>';
+  state.items=await api('/api/items?limit=30000');
+  box.innerHTML=`<div class="page-head item-catalog-head"><div><h3>دليل الأصناف</h3><div class="muted"><span id="itemCount">${state.items.length}</span> صنف</div></div>${can('manage_item_catalog')?`<div class="page-head-actions"><button class="btn btn-soft" id="importItems">استيراد Excel</button><button class="btn btn-primary" id="addItem">+ صنف</button></div>`:''}</div>
+  <div class="toolbar item-toolbar"><input class="input" id="itemSearch" placeholder="بحث بالكود أو اسم الصنف..."></div>
+  <div id="itemRows"></div>`;
+  document.getElementById('itemSearch').oninput=renderItemRows;
+  if(can('manage_item_catalog')){document.getElementById('addItem').onclick=()=>itemModal();document.getElementById('importItems').onclick=()=>itemImportModal();}
+  renderItemRows();
+}
+
+function renderItemRows(){
+  const box=document.getElementById('itemRows');if(!box)return;
+  const q=(document.getElementById('itemSearch')?.value||'').trim().toLowerCase();
+  const rows=state.items.filter(x=>!q||String(x.item_code||'').toLowerCase().includes(q)||String(x.item_name||'').toLowerCase().includes(q));
+  const count=document.getElementById('itemCount');if(count)count.textContent=rows.length;
+  const actions=x=>can('manage_item_catalog')?`<div class="actions"><button class="btn btn-ghost btn-sm" data-item-edit="${x.id}">تعديل</button><button class="btn btn-danger btn-sm" data-item-delete="${x.id}">حذف</button></div>`:'';
+  box.innerHTML=rows.length?`<div class="table-wrap desktop-table"><table><thead><tr><th>الكود</th><th>اسم الصنف</th><th>شكل التعبئة</th><th>فرط / علبة</th>${can('manage_item_catalog')?'<th>إجراءات</th>':''}</tr></thead><tbody>${rows.map(x=>`<tr><td><strong>${esc(x.item_code)}</strong></td><td>${esc(x.item_name)}</td><td>${esc(x.package_form||'—')}</td><td><strong>${Number(x.units_per_box||0).toLocaleString('en-US')}</strong></td>${can('manage_item_catalog')?`<td>${actions(x)}</td>`:''}</tr>`).join('')}</tbody></table></div>
+  <div class="mobile-list">${rows.map(x=>`<div class="item-card"><div class="item-title"><span>${esc(x.item_name)}</span><strong>${esc(x.item_code)}</strong></div><div class="item-meta"><div><span>شكل التعبئة</span>${esc(x.package_form||'—')}</div><div><span>فرط / علبة</span><strong>${Number(x.units_per_box||0).toLocaleString('en-US')}</strong></div></div>${can('manage_item_catalog')?`<div class="item-actions">${actions(x)}</div>`:''}</div>`).join('')}</div>`:'<div class="panel"><div class="empty">لا توجد أصناف مطابقة</div></div>';
+  box.querySelectorAll('[data-item-edit]').forEach(b=>b.onclick=()=>itemModal(state.items.find(x=>x.id===b.dataset.itemEdit)));
+  box.querySelectorAll('[data-item-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف الصنف من دليل الأصناف؟'))return;try{await api(`/api/items/${b.dataset.itemDelete}`,{method:'DELETE'});state.items=state.items.filter(x=>x.id!==b.dataset.itemDelete);toast('تم حذف الصنف');renderItemRows();}catch(e){toast(e.message,true);}});
+}
+
+function itemModal(item=null){
+  showModal(`${item?'تعديل':'إضافة'} صنف`,`<form id="itemForm" class="form-grid"><div class="field"><label>كود الصنف *</label><input class="input" name="item_code" required maxlength="160" value="${esc(item?.item_code||'')}"></div><div class="field"><label>اسم الصنف *</label><input class="input" name="item_name" required maxlength="240" value="${esc(item?.item_name||'')}"></div><div class="field"><label>شكل التعبئة</label><input class="input" name="package_form" maxlength="120" value="${esc(item?.package_form||'')}" placeholder="مثال: Box / Bottle"></div><div class="field"><label>عدد الفرط في العلبة *</label><input class="input" type="number" name="units_per_box" min="1" step="1" required value="${esc(item?.units_per_box||'')}"></div></form>`,async()=>{const f=document.getElementById('itemForm');if(!f.reportValidity())return false;const fd=new FormData(f);const payload={item_code:String(fd.get('item_code')||'').trim(),item_name:String(fd.get('item_name')||'').trim(),package_form:String(fd.get('package_form')||'').trim()||null,units_per_box:Number(fd.get('units_per_box'))};await api(item?`/api/items/${item.id}`:'/api/items',{method:item?'PUT':'POST',body:JSON.stringify(payload)});toast('تم حفظ الصنف');await renderItemsTab();return true;});
+}
+
+function excelColumnOptions(headers,selected=''){return `<option value="">— اختر العمود —</option>${headers.map((h,i)=>`<option value="${i+1}" ${String(selected)===String(i+1)?'selected':''}>${esc(h||`العمود ${i+1}`)}</option>`).join('')}`;}
+function guessExcelColumn(headers,words){const normalized=headers.map(x=>String(x||'').trim().toLowerCase());const i=normalized.findIndex(h=>words.some(w=>h.includes(w)));return i>=0?String(i+1):'';}
+function itemImportModal(){
+  let preview=null;
+  const modal=showModal('استيراد دليل الأصناف من Excel',`<div class="import-step"><div class="field"><label>ملف دليل الأصناف (.xlsx)</label><input class="input" id="itemsExcelFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></div><button class="btn btn-soft" id="previewItemsExcel" type="button">قراءة الملف</button><div class="hint">الاستيراد يعتمد على كود الصنف: الموجود يتحدث والجديد يضاف، بدون تكرار نفس الكود.</div></div><div id="itemsImportMap"></div>`,async()=>{
+    const file=document.getElementById('itemsExcelFile')?.files?.[0];const form=document.getElementById('itemsImportMapping');if(!file||!preview||!form){toast('اقرأ ملف Excel وحدد الأعمدة أولًا',true);return false;}if(!form.reportValidity())return false;
+    const fd=new FormData(form);const body=new FormData();body.append('file',file);body.append('sheet_name',fd.get('sheet_name'));body.append('header_row',fd.get('header_row'));body.append('code_column',fd.get('code_column'));body.append('name_column',fd.get('name_column'));body.append('units_column',fd.get('units_column'));if(fd.get('package_column'))body.append('package_column',fd.get('package_column'));
+    const result=await api('/api/items/import',{method:'POST',body});toast(`تم استيراد ${result.imported} صنف${result.skipped?` — تم تجاهل ${result.skipped} صف`:''}`);state.itemsTab='catalog';await renderItemsTab();return true;
+  },{large:true,saveText:'استيراد الأصناف'});
+  const previewBtn=modal.querySelector('#previewItemsExcel');
+  previewBtn.onclick=async()=>{const file=modal.querySelector('#itemsExcelFile')?.files?.[0];if(!file){toast('اختر ملف Excel أولًا',true);return;}previewBtn.disabled=true;previewBtn.textContent='جاري قراءة الملف...';try{const body=new FormData();body.append('file',file);preview=await api('/api/items/import/preview',{method:'POST',body});renderItemImportMapping(modal,preview);}catch(e){toast(e.message,true);}finally{previewBtn.disabled=false;previewBtn.textContent='قراءة الملف';}};
+}
+function renderItemImportMapping(modal,preview){
+  const box=modal.querySelector('#itemsImportMap');const sheets=preview.sheets||[];if(!sheets.length){box.innerHTML='<div class="empty">لم يتم العثور على أوراق داخل الملف</div>';return;}
+  box.innerHTML=`<form id="itemsImportMapping" class="import-map"><div class="form-grid"><div class="field"><label>ورقة Excel</label><select class="select" name="sheet_name">${sheets.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('')}</select></div><div class="field"><label>صف العناوين</label><input class="input" type="number" name="header_row" min="1" max="20" value="1" required></div></div><div id="itemsColumnMap"></div></form>`;
+  const form=box.querySelector('#itemsImportMapping');const render=()=>{const sheet=sheets.find(s=>s.name===form.elements.sheet_name.value)||sheets[0];const rowNo=Math.max(1,Math.min(20,Number(form.elements.header_row.value)||1));const headers=(sheet.rows?.[rowNo-1]||[]).map((x,i)=>x||`العمود ${i+1}`);const code=guessExcelColumn(headers,['كود','code','item code','barcode']);const name=guessExcelColumn(headers,['اسم الصنف','الصنف','item name','product','name']);const pack=guessExcelColumn(headers,['شكل التعبئة','التعبئة','package','pack']);const units=guessExcelColumn(headers,['فرط','وحدة','units per','pieces','piece','unit']);box.querySelector('#itemsColumnMap').innerHTML=`<div class="form-grid import-columns"><div class="field"><label>عمود كود الصنف *</label><select class="select" name="code_column" required>${excelColumnOptions(headers,code)}</select></div><div class="field"><label>عمود اسم الصنف *</label><select class="select" name="name_column" required>${excelColumnOptions(headers,name)}</select></div><div class="field"><label>عمود شكل التعبئة</label><select class="select" name="package_column">${excelColumnOptions(headers,pack)}</select></div><div class="field"><label>عمود عدد الفرط في العلبة *</label><select class="select" name="units_column" required>${excelColumnOptions(headers,units)}</select></div></div><div class="excel-preview"><small>معاينة صف العناوين</small><div>${headers.map((h,i)=>`<span><b>${i+1}</b>${esc(h)}</span>`).join('')}</div></div>`;};form.elements.sheet_name.onchange=render;form.elements.header_row.oninput=render;render();
 }
 
 async function suppliersView(main){
