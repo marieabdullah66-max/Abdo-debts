@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends
 from ..core import *
 
@@ -61,7 +63,7 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
     if not include_balance and not branch_id:
         return [{**supplier, "categories": categories_by_supplier.get(supplier.get("id"), [])} for supplier in (suppliers or [])]
 
-    inv_params: dict[str, str] = {"select": "supplier_id,balance", "limit": "10000"}
+    inv_params: dict[str, str] = {"select": "supplier_id,balance,invoice_date", "limit": "10000"}
     inv_params = apply_branch_filter(inv_params, profile)
     if branch_id:
         require_branch_access(profile, branch_id)
@@ -69,14 +71,26 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
     invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=inv_params)
 
     balances: dict[str, float] = {}
+    oldest_open_invoice: dict[str, date] = {}
     suppliers_in_branch: set[str] = set()
     for inv in invoices or []:
         sid = inv.get("supplier_id")
         if not sid:
             continue
         suppliers_in_branch.add(sid)
-        balances[sid] = balances.get(sid, 0.0) + float(inv.get("balance") or 0)
+        balance = float(inv.get("balance") or 0)
+        balances[sid] = balances.get(sid, 0.0) + balance
+        if balance <= 0 or not inv.get("invoice_date"):
+            continue
+        try:
+            invoice_date = date.fromisoformat(str(inv.get("invoice_date")))
+        except ValueError:
+            continue
+        previous = oldest_open_invoice.get(sid)
+        if previous is None or invoice_date < previous:
+            oldest_open_invoice[sid] = invoice_date
 
+    today = date.today()
     rows = []
     for supplier in suppliers or []:
         if branch_id and supplier.get("id") not in suppliers_in_branch:
@@ -85,6 +99,14 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
             **supplier,
             "categories": categories_by_supplier.get(supplier.get("id"), []),
             "balance": round(balances.get(supplier.get("id"), 0.0), 2),
+            "aging_days": (
+                max(0, (today - oldest_open_invoice[supplier.get("id")]).days)
+                if supplier.get("id") in oldest_open_invoice else None
+            ),
+            "oldest_open_invoice_date": (
+                oldest_open_invoice[supplier.get("id")].isoformat()
+                if supplier.get("id") in oldest_open_invoice else None
+            ),
         })
     return rows
 

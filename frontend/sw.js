@@ -1,10 +1,10 @@
-const VERSION = 'abdo-debts-v11';
+const VERSION = 'abdo-debts-v12';
 const STATIC_CACHE = `${VERSION}-static`;
 const APP_SHELL = [
   '/',
-  '/assets/styles.css?v=11',
-  '/assets/app.js?v=11',
-  '/assets/manifest.webmanifest?v=11',
+  '/assets/styles.css?v=12',
+  '/assets/app.js?v=12',
+  '/assets/manifest.webmanifest?v=12',
   '/assets/icons/icon-192.png',
   '/assets/icons/icon-512.png'
 ];
