@@ -6,6 +6,52 @@ from ..core import *
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
+def _empty_aging() -> dict[str, Any]:
+    return {
+        "not_due": {"amount": 0.0, "count": 0},
+        "days_0_30": {"amount": 0.0, "count": 0},
+        "days_31_60": {"amount": 0.0, "count": 0},
+        "days_61_90": {"amount": 0.0, "count": 0},
+        "days_90_plus": {"amount": 0.0, "count": 0},
+        "total": 0.0,
+    }
+
+
+def _calculate_aging(invoices: list[dict[str, Any]]) -> dict[str, Any]:
+    """Age open balances by due date, falling back to invoice date.
+
+    Future due dates stay in ``not_due``. Paid invoices are ignored.
+    """
+    today = date.today()
+    result = _empty_aging()
+    for inv in invoices or []:
+        balance = round(float(inv.get("balance") or 0), 2)
+        if balance <= 0:
+            continue
+        raw_reference = inv.get("due_date") or inv.get("invoice_date")
+        if not raw_reference:
+            continue
+        try:
+            reference = date.fromisoformat(str(raw_reference))
+        except ValueError:
+            continue
+        age_days = (today - reference).days
+        if inv.get("due_date") and age_days < 0:
+            bucket = "not_due"
+        elif age_days <= 30:
+            bucket = "days_0_30"
+        elif age_days <= 60:
+            bucket = "days_31_60"
+        elif age_days <= 90:
+            bucket = "days_61_90"
+        else:
+            bucket = "days_90_plus"
+        result[bucket]["amount"] = round(result[bucket]["amount"] + balance, 2)
+        result[bucket]["count"] += 1
+        result["total"] = round(result["total"] + balance, 2)
+    return result
+
+
 def _period_bounds(period: str, from_date: str | None, to_date: str | None) -> tuple[str | None, str | None]:
     today = date.today()
     if period == "this_month":
@@ -61,13 +107,19 @@ async def dashboard(
         "select": "amount,method,payment_date,branch_id,supplier_id",
         "limit": "10000",
     }
+    aging_params: dict[str, str] = {
+        "select": "id,supplier_id,branch_id,balance,invoice_date,due_date",
+        "limit": "10000",
+    }
     inv_params = apply_branch_filter(inv_params, profile)
     pay_params = apply_branch_filter(pay_params, profile)
+    aging_params = apply_branch_filter(aging_params, profile)
 
     if branch_id:
         require_branch_access(profile, branch_id)
         inv_params["branch_id"] = f"eq.{branch_id}"
         pay_params["branch_id"] = f"eq.{branch_id}"
+        aging_params["branch_id"] = f"eq.{branch_id}"
 
     if category_id:
         links = await sb(
@@ -85,17 +137,21 @@ async def dashboard(
                 "month_payments": {"cash": 0, "bank": 0},
                 "top_suppliers": [],
                 "branches": [],
+                "aging": _empty_aging(),
                 "filters": {"period": period or "all", "from_date": start_date, "to_date": end_date},
             }
         supplier_filter = f"in.({','.join(supplier_ids)})"
         inv_params["supplier_id"] = supplier_filter
         pay_params["supplier_id"] = supplier_filter
+        aging_params["supplier_id"] = supplier_filter
 
     _apply_date_bounds(inv_params, "invoice_date", start_date, end_date)
     _apply_date_bounds(pay_params, "payment_date", start_date, end_date)
 
     invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=inv_params)
     payments = await sb("GET", "/rest/v1/payments", service=True, params=pay_params)
+    aging_invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=aging_params)
+    aging = _calculate_aging(aging_invoices or [])
 
     today = date.today().isoformat()
     totals = {
@@ -147,5 +203,6 @@ async def dashboard(
             key=lambda x: x["balance"],
             reverse=True,
         ),
+        "aging": aging,
         "filters": {"period": period or "all", "from_date": start_date, "to_date": end_date},
     }

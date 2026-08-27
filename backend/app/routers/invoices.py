@@ -9,6 +9,36 @@ from .notifications import create_notification_event
 router = APIRouter(prefix="/api/invoices", tags=["invoices"])
 BUCKET = "invoice-pdfs"
 
+
+def _normalize_invoice_number(value: str) -> str:
+    return " ".join((value or "").strip().split()).casefold()
+
+
+async def _ensure_invoice_number_unique(
+    supplier_id: str, invoice_number: str, *, exclude_id: str | None = None
+) -> None:
+    """Prevent the same invoice number from being used twice for one supplier.
+
+    The database migration adds the authoritative trigger. This application-level
+    check exists to return a friendly 409 before attempting the insert/update.
+    """
+    target = _normalize_invoice_number(invoice_number)
+    rows = await sb(
+        "GET",
+        "/rest/v1/invoices",
+        service=True,
+        params={
+            "select": "id,invoice_number",
+            "supplier_id": f"eq.{supplier_id}",
+            "limit": "10000",
+        },
+    )
+    for row in rows or []:
+        if exclude_id and str(row.get("id")) == str(exclude_id):
+            continue
+        if _normalize_invoice_number(str(row.get("invoice_number") or "")) == target:
+            raise HTTPException(409, "رقم الفاتورة موجود مسبقًا لهذا المورد ولا يمكن تكراره")
+
 async def _invoice(invoice_id: str) -> dict[str, Any]:
     rows = await sb("GET", "/rest/v1/invoices", service=True, params={
         "select": "id,supplier_id,branch_id,invoice_number,amount,invoice_date,due_date,notes,pdf_path,suppliers(name),branches(name)",
@@ -53,10 +83,7 @@ async def create_invoice(data: InvoiceInput, profile: dict[str, Any] = Depends(c
     supplier = await sb("GET", "/rest/v1/suppliers", service=True, params={"select": "id", "id": f"eq.{data.supplier_id}", "active": "eq.true", "limit": "1"})
     if not supplier:
         raise HTTPException(422, "المورد غير موجود")
-    duplicate = await sb("GET", "/rest/v1/invoices", service=True, params={
-        "select": "id", "supplier_id": f"eq.{data.supplier_id}", "branch_id": f"eq.{data.branch_id}",
-        "invoice_number": f"eq.{data.invoice_number.strip()}", "limit": "1"
-    })
+    await _ensure_invoice_number_unique(data.supplier_id, data.invoice_number)
     rows = await sb("POST", "/rest/v1/invoices", service=True, headers={"Prefer": "return=representation"}, json={
         "supplier_id": data.supplier_id, "branch_id": data.branch_id, "invoice_number": data.invoice_number.strip(),
         "amount": round(data.amount, 2), "invoice_date": data.invoice_date.isoformat(),
@@ -64,7 +91,6 @@ async def create_invoice(data: InvoiceInput, profile: dict[str, Any] = Depends(c
         "created_by": profile["id"],
     })
     result = rows[0]
-    result["duplicate_warning"] = bool(duplicate)
     await create_notification_event(
         event_type="invoice_created", branch_id=data.branch_id, supplier_id=data.supplier_id,
         entity_id=str(result["id"]), amount=data.amount, profile=profile,
@@ -84,6 +110,10 @@ async def update_invoice(invoice_id: str, data: InvoiceUpdateInput, profile: dic
         raise HTTPException(409, "لا يمكن تغيير المورد أو الفرع لفاتورة عليها سدادات؛ عدّل أو احذف السداد أولاً")
     if round(data.amount, 2) < paid:
         raise HTTPException(422, f"قيمة الفاتورة لا يمكن أن تقل عن المسدد ({paid:.2f})")
+    current_number = _normalize_invoice_number(str(current.get("invoice_number") or ""))
+    new_number = _normalize_invoice_number(data.invoice_number)
+    if data.supplier_id != current["supplier_id"] or new_number != current_number:
+        await _ensure_invoice_number_unique(data.supplier_id, data.invoice_number, exclude_id=invoice_id)
     rows = await sb("PATCH", "/rest/v1/invoices", service=True, headers={"Prefer": "return=representation"}, params={"id": f"eq.{invoice_id}"}, json={
         "supplier_id": data.supplier_id, "branch_id": data.branch_id, "invoice_number": data.invoice_number.strip(),
         "amount": round(data.amount, 2), "invoice_date": data.invoice_date.isoformat(),
