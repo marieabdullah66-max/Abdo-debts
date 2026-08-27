@@ -70,3 +70,9 @@ python run.py
 - Deduplicates concurrent refresh requests.
 - Prevents raw Supabase JWT errors from appearing in the UI.
 - No database migration is required for V14.
+
+
+## V15 - Searchable supplier in payment plan
+- The supplier field in Add/Edit Payment Plan is now searchable by supplier name.
+- The side arrow opens the full supplier list.
+- No database migration is required for V15.
