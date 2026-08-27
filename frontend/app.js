@@ -5,7 +5,8 @@ const state = {
   accessToken: localStorage.getItem('debts_access') || '',
   refreshToken: localStorage.getItem('debts_refresh') || '',
   profile: null,
-  branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], users: [], categories: [], items: [],
+  branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], users: [], categories: [], items: [], notifications: [],
+  notificationUnread: 0, notificationTimer: null,
   supplierBranchId: '',
   supplierCategoryId: '',
   dashboardBranchId: '',
@@ -43,7 +44,7 @@ function setTokens(data){
   state.accessToken=data.access_token||''; state.refreshToken=data.refresh_token||state.refreshToken||'';
   localStorage.setItem('debts_access',state.accessToken); if(state.refreshToken)localStorage.setItem('debts_refresh',state.refreshToken);
 }
-function logout(){localStorage.removeItem('debts_access');localStorage.removeItem('debts_refresh');state.accessToken='';state.refreshToken='';state.profile=null;renderLogin();}
+function logout(){if(state.notificationTimer)clearInterval(state.notificationTimer);state.notificationTimer=null;localStorage.removeItem('debts_access');localStorage.removeItem('debts_refresh');state.accessToken='';state.refreshToken='';state.profile=null;renderLogin();}
 
 async function api(path, options={}, retry=true){
   const headers={...(options.headers||{})};
@@ -59,11 +60,32 @@ async function api(path, options={}, retry=true){
   const ct=res.headers.get('content-type')||'';return ct.includes('json')?res.json():res;
 }
 
+function fmtDateTime(v){try{return new Intl.DateTimeFormat('ar-LY',{dateStyle:'short',timeStyle:'short'}).format(new Date(v));}catch{return String(v||'');}}
+function notificationAccess(){return can('view_invoices')||can('view_payments');}
+function updateNotificationBell(){const badge=document.getElementById('notificationBadge');if(!badge)return;const n=Number(state.notificationUnread||0);badge.textContent=n>99?'99+':String(n);badge.classList.toggle('hidden',n<=0);}
+async function loadNotifications(silent=true){
+  if(!state.profile||!notificationAccess()){state.notifications=[];state.notificationUnread=0;updateNotificationBell();return;}
+  try{const data=await api('/api/notifications');state.notifications=data.items||[];state.notificationUnread=Number(data.unread_count||0);updateNotificationBell();}
+  catch(e){if(!silent)toast(e.message,true);}
+}
+function startNotificationPolling(){if(state.notificationTimer)clearInterval(state.notificationTimer);state.notificationTimer=null;if(!notificationAccess())return;state.notificationTimer=setInterval(()=>loadNotifications(true),30000);}
+function notificationBody(n){
+  if(n.event_type==='invoice_created')return `تمت إضافة فاتورة ${n.invoice_number?`رقم ${esc(n.invoice_number)} `:''}بقيمة <strong>${money(n.amount)}</strong> للمورد <strong>${esc(n.supplier_name)}</strong> — ${esc(n.branch_name)}`;
+  return `تم تسجيل سداد بقيمة <strong>${money(n.amount)}</strong> للمورد <strong>${esc(n.supplier_name)}</strong> — ${esc(n.branch_name)}`;
+}
+async function openNotifications(){
+  await loadNotifications(false);
+  const list=state.notifications.length?state.notifications.map(n=>`<button class="notification-item ${n.is_read?'':'unread'}" data-notification-id="${n.id}" data-target-view="${n.event_type==='invoice_created'?'invoices':'payments'}"><span class="notification-icon">${n.event_type==='invoice_created'?'🧾':'💳'}</span><span class="notification-content"><strong>${n.event_type==='invoice_created'?'فاتورة جديدة':'سداد جديد'}</strong><span>${notificationBody(n)}</span><small>بواسطة ${esc(n.actor_name)} • ${esc(fmtDateTime(n.created_at))}</small></span></button>`).join(''):'<div class="empty">لا توجد إشعارات حتى الآن</div>';
+  const wrap=showModal('الإشعارات',`<div class="notification-list">${list}</div>`,null,{saveText:null});
+  wrap.querySelectorAll('[data-notification-id]').forEach(btn=>btn.onclick=async()=>{try{if(btn.classList.contains('unread'))await api(`/api/notifications/${btn.dataset.notificationId}/read`,{method:'POST'});}catch{}wrap.remove();go(btn.dataset.targetView);});
+  if(state.notificationUnread>0){try{await api('/api/notifications/read-all',{method:'POST'});state.notificationUnread=0;state.notifications=state.notifications.map(x=>({...x,is_read:true}));updateNotificationBell();}catch{}}
+}
+
 async function bootstrap(){
   if(!state.accessToken)return renderLogin();
   try{
     state.profile=await api('/api/me');
-    await loadBase(); renderApp();
+    await loadBase(); await loadNotifications(true); renderApp(); startNotificationPolling();
   }catch(e){logout();}
 }
 async function loadBase(){
@@ -84,7 +106,7 @@ async function renderLogin(){
     </form></div></div>`;
   document.getElementById('loginForm').onsubmit=async e=>{
     e.preventDefault();const fd=new FormData(e.currentTarget);const btn=e.currentTarget.querySelector('button');btn.disabled=true;btn.textContent='جاري الدخول...';
-    try{const data=await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:fd.get('username'),password:fd.get('password')})},false);setTokens(data);state.profile=data.profile;await loadBase();renderApp();}
+    try{const data=await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:fd.get('username'),password:fd.get('password')})},false);setTokens(data);state.profile=data.profile;await loadBase();await loadNotifications(true);renderApp();startNotificationPolling();}
     catch(err){toast(err.message,true);btn.disabled=false;btn.textContent='دخول';}
   };
 }
@@ -101,11 +123,11 @@ function renderApp(){
   if(allowedViews[state.view] && !can(allowedViews[state.view])) state.view=can('view_dashboard')?'dashboard':can('view_invoices')?'invoices':'settings';
   const settingsVisible=can('manage_branches')||can('manage_suppliers')||can('manage_users');
   root.innerHTML=`<div class="app">
-    <header class="topbar"><div class="topbar-inner"><div class="top-title"><div>💰</div><div><strong>Abdo Debts</strong><small>نظام المديونيات</small></div></div><div class="user-box"><span class="user-name">${esc(state.profile.full_name)}</span><button class="btn btn-ghost btn-sm" id="logoutBtn">خروج</button></div></div></header>
+    <header class="topbar"><div class="topbar-inner"><div class="top-title"><div>💰</div><div><strong>Abdo Debts</strong><small>نظام المديونيات</small></div></div><div class="user-box">${notificationAccess()?`<button class="notification-bell" id="notificationBell" aria-label="الإشعارات" title="الإشعارات">🔔<span id="notificationBadge" class="notification-badge ${state.notificationUnread>0?'':'hidden'}">${state.notificationUnread>99?'99+':state.notificationUnread}</span></button>`:''}<span class="user-name">${esc(state.profile.full_name)}</span><button class="btn btn-ghost btn-sm" id="logoutBtn">خروج</button></div></div></header>
     <main class="main" id="main"></main>
     <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
   </div>`;
-  document.getElementById('logoutBtn').onclick=logout;
+  document.getElementById('logoutBtn').onclick=logout;const bell=document.getElementById('notificationBell');if(bell)bell.onclick=openNotifications;updateNotificationBell();
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
   syncStickyOffsets();
   requestAnimationFrame(syncStickyOffsets);
@@ -322,7 +344,7 @@ function invoiceModal(i=null,opts={}){const lockedSupplier=opts.supplierId||'';c
  <div class="field"><label>تاريخ الفاتورة *</label><input class="input" name="invoice_date" type="date" required value="${i?.invoice_date||isoToday()}"></div>
  <div class="field"><label>تاريخ الاستحقاق <span class="muted">اختياري</span></label><input class="input" name="due_date" type="date" value="${i?.due_date||''}"></div>
  <div class="field full"><label>PDF الفاتورة <span class="muted">اختياري — حتى 10MB</span></label><input class="input" name="pdf" type="file" accept="application/pdf"></div>
- <div class="field full"><label>ملاحظات</label><textarea class="textarea" name="notes">${esc(i?.notes||'')}</textarea></div></form>`,async()=>{const f=document.getElementById('invoiceForm');if(!f.reportValidity())return false;const fd=new FormData(f);const payload={supplier_id:lockedSupplier||fd.get('supplier_id'),branch_id:fd.get('branch_id'),invoice_number:fd.get('invoice_number'),amount:Number(fd.get('amount')),invoice_date:fd.get('invoice_date'),due_date:fd.get('due_date')||null,notes:fd.get('notes')||null};const saved=await api(i?`/api/invoices/${i.id}`:'/api/invoices',{method:i?'PUT':'POST',body:JSON.stringify(payload)});const id=i?.id||saved.id;const file=fd.get('pdf');if(file&&file.size){const up=new FormData();up.append('file',file);await api(`/api/invoices/${id}/pdf`,{method:'POST',body:up});}if(saved.duplicate_warning)toast('تم الحفظ — تنبيه: رقم الفاتورة موجود سابقًا');else toast('تم حفظ الفاتورة');if(opts.onSaved)await opts.onSaved(saved);else if(state.view==='invoices')await invoicesView(document.getElementById('main'));return true;});
+ <div class="field full"><label>ملاحظات</label><textarea class="textarea" name="notes">${esc(i?.notes||'')}</textarea></div></form>`,async()=>{const f=document.getElementById('invoiceForm');if(!f.reportValidity())return false;const fd=new FormData(f);const payload={supplier_id:lockedSupplier||fd.get('supplier_id'),branch_id:fd.get('branch_id'),invoice_number:fd.get('invoice_number'),amount:Number(fd.get('amount')),invoice_date:fd.get('invoice_date'),due_date:fd.get('due_date')||null,notes:fd.get('notes')||null};const saved=await api(i?`/api/invoices/${i.id}`:'/api/invoices',{method:i?'PUT':'POST',body:JSON.stringify(payload)});const id=i?.id||saved.id;const file=fd.get('pdf');if(file&&file.size){const up=new FormData();up.append('file',file);await api(`/api/invoices/${id}/pdf`,{method:'POST',body:up});}if(saved.duplicate_warning)toast('تم الحفظ — تنبيه: رقم الفاتورة موجود سابقًا');else toast('تم حفظ الفاتورة');if(!i)await loadNotifications(true);if(opts.onSaved)await opts.onSaved(saved);else if(state.view==='invoices')await invoicesView(document.getElementById('main'));return true;});
  const f=document.getElementById('invoiceForm');const supplierCombo=wireSupplierCombobox(initialSupplier,!!lockedSupplier);f.elements.branch_id.value=i?.branch_id||'';const quick=document.getElementById('quickSupplier');if(quick)quick.onclick=()=>supplierModal(null,s=>{supplierCombo?.setSupplier(s.id);});}
 
 async function paymentsView(main){
@@ -340,7 +362,7 @@ function paymentModal(p=null,opts={}){const lockedSupplier=opts.supplierId||'';s
  <div class="field"><label>المورد *</label><select class="select" name="supplier_id" id="paySupplier" required>${supplierOptions()}</select></div><div class="field"><label>الفرع *</label><select class="select" name="branch_id" id="payBranch" required><option value="">اختر الفرع</option>${branchOptions(false)}</select></div>
  <div class="field"><label>تاريخ السداد *</label><input class="input" type="date" name="payment_date" required value="${p?.payment_date||isoToday()}"></div><div class="field"><label>طريقة السداد *</label><select class="select" name="method" id="payMethod"><option value="cash">نقدي</option><option value="bank">مصرف</option></select></div>
  <div class="field full hidden" id="bankField"><label>اسم المصرف *</label><input class="input" name="bank_name" value="${esc(p?.bank_name||'')}"></div><div class="field full"><label>ملاحظات</label><textarea class="textarea" name="notes">${esc(p?.notes||'')}</textarea></div>
- <div class="full"><div style="display:flex;justify-content:space-between;align-items:center"><strong>توزيع السداد على الفواتير</strong><span class="hint">اختر الفواتير واكتب المبلغ لكل فاتورة</span></div><div id="allocationList" class="allocation-list"><div class="empty">اختر المورد والفرع</div></div><div class="sum-box"><span>إجمالي السداد</span><span id="paymentSum">0.00 د.ل</span></div></div></form>`,async()=>{const f=document.getElementById('paymentForm');if(!f.reportValidity())return false;const selected=[...document.querySelectorAll('.alloc-check:checked')];const allocations=selected.map(c=>({invoice_id:c.dataset.id,amount:Number(document.querySelector(`[data-amount="${c.dataset.id}"]`).value||0)})).filter(x=>x.amount>0);const amount=allocations.reduce((s,x)=>s+x.amount,0);if(!allocations.length){toast('اختر فاتورة واحدة على الأقل وحدد مبلغ السداد',true);return false;}const fd=new FormData(f);const payload={supplier_id:lockedSupplier||fd.get('supplier_id'),branch_id:fd.get('branch_id'),amount:Number(amount.toFixed(2)),payment_date:fd.get('payment_date'),method:fd.get('method'),bank_name:fd.get('method')==='bank'?fd.get('bank_name'):null,notes:fd.get('notes')||null,allocations};await api(p?`/api/payments/${p.id}`:'/api/payments',{method:p?'PUT':'POST',body:JSON.stringify(payload)});toast('تم حفظ السداد');if(opts.onSaved)await opts.onSaved();else if(state.view==='payments')await paymentsView(document.getElementById('main'));return true;},{large:true});
+ <div class="full"><div style="display:flex;justify-content:space-between;align-items:center"><strong>توزيع السداد على الفواتير</strong><span class="hint">اختر الفواتير واكتب المبلغ لكل فاتورة</span></div><div id="allocationList" class="allocation-list"><div class="empty">اختر المورد والفرع</div></div><div class="sum-box"><span>إجمالي السداد</span><span id="paymentSum">0.00 د.ل</span></div></div></form>`,async()=>{const f=document.getElementById('paymentForm');if(!f.reportValidity())return false;const selected=[...document.querySelectorAll('.alloc-check:checked')];const allocations=selected.map(c=>({invoice_id:c.dataset.id,amount:Number(document.querySelector(`[data-amount="${c.dataset.id}"]`).value||0)})).filter(x=>x.amount>0);const amount=allocations.reduce((s,x)=>s+x.amount,0);if(!allocations.length){toast('اختر فاتورة واحدة على الأقل وحدد مبلغ السداد',true);return false;}const fd=new FormData(f);const payload={supplier_id:lockedSupplier||fd.get('supplier_id'),branch_id:fd.get('branch_id'),amount:Number(amount.toFixed(2)),payment_date:fd.get('payment_date'),method:fd.get('method'),bank_name:fd.get('method')==='bank'?fd.get('bank_name'):null,notes:fd.get('notes')||null,allocations};await api(p?`/api/payments/${p.id}`:'/api/payments',{method:p?'PUT':'POST',body:JSON.stringify(payload)});toast('تم حفظ السداد');if(!p)await loadNotifications(true);if(opts.onSaved)await opts.onSaved();else if(state.view==='payments')await paymentsView(document.getElementById('main'));return true;},{large:true});
  const f=document.getElementById('paymentForm'),supplier=f.elements.supplier_id,branch=f.elements.branch_id,method=f.elements.method;supplier.value=p?.supplier_id||lockedSupplier||'';if(lockedSupplier)supplier.disabled=true;branch.value=p?.branch_id||'';method.value=p?.method||'cash';
  const toggleBank=()=>{const bank=document.getElementById('bankField');bank.classList.toggle('hidden',method.value!=='bank');f.elements.bank_name.required=method.value==='bank';};method.onchange=toggleBank;toggleBank();
  let old={};(p?.payment_allocations||[]).forEach(a=>old[a.invoice_id]=Number(a.amount));

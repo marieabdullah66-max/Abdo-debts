@@ -4,6 +4,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import Response
 from ..core import *
+from .notifications import create_notification_event
 
 router = APIRouter(prefix="/api/invoices", tags=["invoices"])
 BUCKET = "invoice-pdfs"
@@ -64,6 +65,11 @@ async def create_invoice(data: InvoiceInput, profile: dict[str, Any] = Depends(c
     })
     result = rows[0]
     result["duplicate_warning"] = bool(duplicate)
+    await create_notification_event(
+        event_type="invoice_created", branch_id=data.branch_id, supplier_id=data.supplier_id,
+        entity_id=str(result["id"]), amount=data.amount, profile=profile,
+        invoice_number=data.invoice_number.strip(),
+    )
     return result
 
 @router.put("/{invoice_id}")

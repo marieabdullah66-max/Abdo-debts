@@ -63,6 +63,32 @@ create table if not exists public.item_catalog (
 create index if not exists item_catalog_name_idx on public.item_catalog using btree (lower(item_name));
 create index if not exists item_catalog_code_idx on public.item_catalog(item_code);
 
+create table if not exists public.notifications (
+  id uuid primary key default gen_random_uuid(),
+  event_type text not null check (event_type in ('invoice_created','payment_created')),
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  supplier_id uuid references public.suppliers(id) on delete set null,
+  entity_id uuid not null,
+  amount numeric(14,2) not null check (amount >= 0),
+  invoice_number text,
+  supplier_name text not null,
+  branch_name text not null,
+  actor_id uuid references public.profiles(id) on delete set null,
+  actor_name text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists notifications_created_idx on public.notifications(created_at desc);
+create index if not exists notifications_branch_idx on public.notifications(branch_id, created_at desc);
+create index if not exists notifications_event_idx on public.notifications(event_type, created_at desc);
+
+create table if not exists public.notification_reads (
+  notification_id uuid not null references public.notifications(id) on delete cascade,
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  read_at timestamptz not null default now(),
+  primary key (notification_id, profile_id)
+);
+create index if not exists notification_reads_profile_idx on public.notification_reads(profile_id, read_at desc);
+
 create table if not exists public.invoices (
   id uuid primary key default gen_random_uuid(),
   supplier_id uuid not null references public.suppliers(id) on delete restrict,
@@ -252,6 +278,8 @@ alter table public.invoices enable row level security;
 alter table public.payments enable row level security;
 alter table public.payment_allocations enable row level security;
 alter table public.item_catalog enable row level security;
+alter table public.notifications enable row level security;
+alter table public.notification_reads enable row level security;
 
 -- Private bucket for the original invoice PDF attachment (max enforced again in API).
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -261,7 +289,7 @@ on conflict (id) do update set public=false, file_size_limit=10485760, allowed_m
 -- Do not expose financial data directly through the public Supabase API roles.
 revoke all on table public.branches, public.profiles, public.profile_branches, public.suppliers,
   public.supplier_categories, public.supplier_category_links, public.invoices, public.payments,
-  public.payment_allocations, public.item_catalog from anon, authenticated;
+  public.payment_allocations, public.item_catalog, public.notifications, public.notification_reads from anon, authenticated;
 revoke all on table public.invoice_balances from anon, authenticated;
 revoke execute on function public.create_payment_with_allocations(uuid,uuid,numeric,date,text,text,text,uuid,jsonb) from public, anon, authenticated;
 revoke execute on function public.update_payment_with_allocations(uuid,uuid,uuid,numeric,date,text,text,text,jsonb) from public, anon, authenticated;

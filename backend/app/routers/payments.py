@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends
 from ..core import *
+from .notifications import create_notification_event
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
@@ -73,6 +74,10 @@ async def create_payment(data: PaymentInput, profile: dict[str, Any] = Depends(c
         "p_created_by": profile["id"],
         "p_allocations": [{"invoice_id": x.invoice_id, "amount": round(x.amount, 2)} for x in data.allocations],
     })
+    await create_notification_event(
+        event_type="payment_created", branch_id=data.branch_id, supplier_id=data.supplier_id,
+        entity_id=str(rows), amount=data.amount, profile=profile,
+    )
     return {"id": rows}
 
 @router.put("/{payment_id}")
