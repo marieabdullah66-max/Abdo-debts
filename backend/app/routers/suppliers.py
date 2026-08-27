@@ -51,7 +51,8 @@ async def _replace_supplier_categories(supplier_id: str, category_ids: list[str]
 
 @router.get("")
 async def list_suppliers(q: str | None = None, branch_id: str | None = None, include_balance: bool = False, profile: dict[str, Any] = Depends(current_profile)) -> Any:
-    require_permission(profile, "view_suppliers")
+    if not (effective_permissions(profile).get("view_suppliers") or effective_permissions(profile).get("view_payment_plans")):
+        raise HTTPException(403, "ليس لديك صلاحية عرض الموردين")
     params = {"select": "id,name,phone,notes,active,created_at", "active": "eq.true", "order": "name.asc", "limit": "5000"}
     if q:
         safe = q.strip().replace("%", "")[:80]

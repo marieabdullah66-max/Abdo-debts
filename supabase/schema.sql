@@ -136,6 +136,27 @@ create table if not exists public.payment_allocations (
 create index if not exists payment_allocations_invoice_idx on public.payment_allocations(invoice_id);
 create index if not exists payment_allocations_payment_idx on public.payment_allocations(payment_id);
 
+create table if not exists public.payment_plans (
+  id uuid primary key default gen_random_uuid(),
+  supplier_id uuid not null references public.suppliers(id) on delete restrict,
+  branch_id uuid not null references public.branches(id) on delete restrict,
+  planned_amount numeric(14,2) not null check (planned_amount > 0),
+  planned_date date not null,
+  notes text,
+  status text not null default 'planned' check (status in ('planned','postponed','completed','cancelled')),
+  postpone_count integer not null default 0 check (postpone_count >= 0),
+  last_postpone_reason text,
+  completed_payment_id uuid references public.payments(id) on delete set null,
+  completed_at timestamptz,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists payment_plans_date_idx on public.payment_plans(planned_date, status);
+create index if not exists payment_plans_supplier_idx on public.payment_plans(supplier_id, planned_date);
+create index if not exists payment_plans_branch_idx on public.payment_plans(branch_id, planned_date);
+create index if not exists payment_plans_status_idx on public.payment_plans(status, planned_date);
+
 create or replace view public.invoice_balances as
 select
   i.id, i.supplier_id, i.branch_id, s.name as supplier_name, b.name as branch_name,
@@ -277,6 +298,7 @@ alter table public.supplier_category_links enable row level security;
 alter table public.invoices enable row level security;
 alter table public.payments enable row level security;
 alter table public.payment_allocations enable row level security;
+alter table public.payment_plans enable row level security;
 alter table public.item_catalog enable row level security;
 alter table public.notifications enable row level security;
 alter table public.notification_reads enable row level security;
@@ -289,7 +311,7 @@ on conflict (id) do update set public=false, file_size_limit=10485760, allowed_m
 -- Do not expose financial data directly through the public Supabase API roles.
 revoke all on table public.branches, public.profiles, public.profile_branches, public.suppliers,
   public.supplier_categories, public.supplier_category_links, public.invoices, public.payments,
-  public.payment_allocations, public.item_catalog, public.notifications, public.notification_reads from anon, authenticated;
+  public.payment_allocations, public.payment_plans, public.item_catalog, public.notifications, public.notification_reads from anon, authenticated;
 revoke all on table public.invoice_balances from anon, authenticated;
 revoke execute on function public.create_payment_with_allocations(uuid,uuid,numeric,date,text,text,text,uuid,jsonb) from public, anon, authenticated;
 revoke execute on function public.update_payment_with_allocations(uuid,uuid,uuid,numeric,date,text,text,text,jsonb) from public, anon, authenticated;

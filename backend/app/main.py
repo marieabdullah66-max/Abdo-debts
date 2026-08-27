@@ -6,9 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .core import FRONTEND, close_http_client
-from .routers import admin, auth, dashboard, invoices, items, notifications, payments, suppliers
+from .routers import admin, auth, dashboard, invoices, items, notifications, payment_plans, payments, suppliers
 
-app = FastAPI(title="Abdo Debts API", version="11.0.0")
+app = FastAPI(title="Abdo Debts API", version="13.0.0")
 
 allowed_origins = [x.strip() for x in os.getenv("ALLOWED_ORIGINS", "").split(",") if x.strip()]
 if allowed_origins:
@@ -34,7 +34,7 @@ async def security_headers(request: Request, call_next):
 async def shutdown_http_client() -> None:
     await close_http_client()
 
-for router in (auth.router, dashboard.router, suppliers.router, invoices.router, payments.router, notifications.router, items.router, admin.router):
+for router in (auth.router, dashboard.router, suppliers.router, invoices.router, payments.router, payment_plans.router, notifications.router, items.router, admin.router):
     app.include_router(router)
 
 app.mount("/assets", StaticFiles(directory=FRONTEND), name="assets")

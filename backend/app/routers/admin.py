@@ -95,7 +95,7 @@ async def update_branch(branch_id: str, data: BranchUpdateInput, profile: dict[s
 @router.delete("/branches/{branch_id}")
 async def delete_branch(branch_id: str, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "manage_branches")
-    for table in ("invoices", "payments", "profile_branches"):
+    for table in ("invoices", "payments", "payment_plans", "profile_branches"):
         linked = await sb("GET", f"/rest/v1/{table}", service=True, params={"select": "id" if table != "profile_branches" else "profile_id", "branch_id": f"eq.{branch_id}", "limit": "1"})
         if linked:
             raise HTTPException(409, "لا يمكن حذف الفرع لوجود بيانات مرتبطة به؛ أوقفه بدلًا من الحذف")

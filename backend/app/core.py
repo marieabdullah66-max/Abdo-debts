@@ -36,6 +36,7 @@ PERMISSION_KEYS = {
     "view_payments", "create_payments", "edit_payments", "delete_payments",
     "manage_branches", "manage_users", "view_reports",
     "view_item_analysis", "manage_item_catalog",
+    "view_payment_plans", "manage_payment_plans",
 }
 
 ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
@@ -53,6 +54,8 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
         "view_reports": True,
         "view_item_analysis": True,
         "manage_item_catalog": True,
+        "view_payment_plans": True,
+        "manage_payment_plans": True,
     },
     "viewer": {
         "view_dashboard": True,
@@ -61,6 +64,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
         "view_payments": True,
         "view_reports": True,
         "view_item_analysis": True,
+        "view_payment_plans": True,
     },
 }
 
@@ -277,6 +281,23 @@ class InvoiceUpdateInput(InvoiceInput):
 class PaymentAllocationInput(BaseModel):
     invoice_id: str
     amount: float = Field(gt=0, le=999999999999)
+
+
+class PaymentPlanInput(BaseModel):
+    supplier_id: str
+    branch_id: str
+    planned_amount: float = Field(gt=0, le=999999999999)
+    planned_date: date
+    notes: str | None = Field(default=None, max_length=1500)
+
+
+class PaymentPlanPostponeInput(BaseModel):
+    planned_date: date
+    reason: str = Field(min_length=2, max_length=1000)
+
+
+class PaymentPlanCompleteInput(BaseModel):
+    payment_id: str | None = None
 
 
 class PaymentInput(BaseModel):

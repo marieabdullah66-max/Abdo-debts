@@ -5,7 +5,7 @@ const state = {
   accessToken: localStorage.getItem('debts_access') || '',
   refreshToken: localStorage.getItem('debts_refresh') || '',
   profile: null,
-  branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], users: [], categories: [], items: [], notifications: [],
+  branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], paymentPlans: [], users: [], categories: [], items: [], notifications: [],
   notificationUnread: 0, notificationTimer: null,
   supplierBranchId: '',
   supplierCategoryId: '',
@@ -15,6 +15,9 @@ const state = {
   dashboardFromDate: '',
   dashboardToDate: '',
   itemsTab: 'catalog',
+  paymentPlanBranchId: '',
+  paymentPlanStatus: 'open',
+  paymentPlanSearch: '',
   view: new URLSearchParams(location.search).get('view') || 'dashboard',
   supplierId: new URLSearchParams(location.search).get('supplier_id') || '',
 };
@@ -24,19 +27,20 @@ const PERMISSION_LABELS = {
   view_invoices:'عرض الفواتير', create_invoices:'إضافة فاتورة', edit_invoices:'تعديل الفاتورة', delete_invoices:'حذف الفاتورة',
   view_payments:'عرض السدادات', create_payments:'إضافة سداد', edit_payments:'تعديل السداد', delete_payments:'حذف السداد',
   manage_branches:'إدارة الفروع', manage_users:'إدارة المستخدمين', view_reports:'عرض التقارير',
-  view_item_analysis:'عرض حركة الأصناف', manage_item_catalog:'إدارة دليل الأصناف'
+  view_item_analysis:'عرض حركة الأصناف', manage_item_catalog:'إدارة دليل الأصناف',
+  view_payment_plans:'عرض خطة السداد', manage_payment_plans:'إدارة خطة السداد'
 };
 const ROLE_LABELS = {admin:'مدير', finance:'مالي', viewer:'مشاهدة فقط'};
 const ROLE_DEFAULTS = {
   admin: Object.fromEntries(Object.keys(PERMISSION_LABELS).map(k=>[k,true])),
-  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true},
-  viewer: {view_dashboard:true,view_suppliers:true,view_invoices:true,view_payments:true,view_reports:true,view_item_analysis:true}
+  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true,view_payment_plans:true,manage_payment_plans:true},
+  viewer: {view_dashboard:true,view_suppliers:true,view_invoices:true,view_payments:true,view_reports:true,view_item_analysis:true,view_payment_plans:true}
 };
 const STATUS_LABELS = {unpaid:'غير مسددة', partial:'جزئي', paid:'مسددة'};
 
 function esc(v=''){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function money(v){return `${Number(v||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})} د.ل`;}
-function isoToday(){return new Date().toISOString().slice(0,10);}
+function isoToday(){const d=new Date(),local=new Date(d.getTime()-d.getTimezoneOffset()*60000);return local.toISOString().slice(0,10);}
 function can(p){return !!state.profile?.effective_permissions?.[p];}
 function toast(msg, error=false){toastEl.textContent=msg;toastEl.className=`toast show${error?' error':''}`;clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.className='toast',2800);}
 function confirmAction(msg){return window.confirm(msg);}
@@ -90,7 +94,7 @@ async function bootstrap(){
 }
 async function loadBase(){
   const jobs=[api('/api/admin/branches').then(x=>state.branches=x||[])];
-  if(can('view_suppliers')) jobs.push(api('/api/suppliers').then(x=>state.suppliers=x||[]));
+  if(can('view_suppliers')||can('view_payment_plans')) jobs.push(api('/api/suppliers').then(x=>state.suppliers=x||[]));
   if(can('view_dashboard') || can('view_suppliers')) jobs.push(api('/api/admin/supplier-categories').then(x=>state.categories=x||[]));
   await Promise.all(jobs);
 }
@@ -119,13 +123,13 @@ function syncStickyOffsets(){
 }
 function renderApp(){
   if(!state.profile)return renderLogin();
-  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',settings:null};
+  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
   if(allowedViews[state.view] && !can(allowedViews[state.view])) state.view=can('view_dashboard')?'dashboard':can('view_invoices')?'invoices':'settings';
   const settingsVisible=can('manage_branches')||can('manage_suppliers')||can('manage_users');
   root.innerHTML=`<div class="app">
     <header class="topbar"><div class="topbar-inner"><div class="top-title"><div>💰</div><div><strong>Abdo Debts</strong><small>نظام المديونيات</small></div></div><div class="user-box">${notificationAccess()?`<button class="notification-bell" id="notificationBell" aria-label="الإشعارات" title="الإشعارات">🔔<span id="notificationBadge" class="notification-badge ${state.notificationUnread>0?'':'hidden'}">${state.notificationUnread>99?'99+':state.notificationUnread}</span></button>`:''}<span class="user-name">${esc(state.profile.full_name)}</span><button class="btn btn-ghost btn-sm" id="logoutBtn">خروج</button></div></div></header>
     <main class="main" id="main"></main>
-    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
+    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
   </div>`;
   document.getElementById('logoutBtn').onclick=logout;const bell=document.getElementById('notificationBell');if(bell)bell.onclick=openNotifications;updateNotificationBell();
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
@@ -142,6 +146,7 @@ async function renderView(){const main=document.getElementById('main');main.inne
   else if(state.view==='supplier')await supplierDetailView(main);
   else if(state.view==='invoices')await invoicesView(main);
   else if(state.view==='payments')await paymentsView(main);
+  else if(state.view==='paymentplan')await paymentPlansView(main);
   else if(state.view==='settings')await settingsView(main);
 }catch(e){main.innerHTML=`<div class="panel"><div class="empty">${esc(e.message)}</div></div>`;toast(e.message,true);}}
 
@@ -362,6 +367,59 @@ function invoiceModal(i=null,opts={}){const lockedSupplier=opts.supplierId||'';c
  <div class="field full"><label>ملاحظات</label><textarea class="textarea" name="notes">${esc(i?.notes||'')}</textarea></div></form>`,async()=>{const f=document.getElementById('invoiceForm');if(!f.reportValidity())return false;const fd=new FormData(f);const payload={supplier_id:lockedSupplier||fd.get('supplier_id'),branch_id:fd.get('branch_id'),invoice_number:fd.get('invoice_number'),amount:Number(fd.get('amount')),invoice_date:fd.get('invoice_date'),due_date:fd.get('due_date')||null,notes:fd.get('notes')||null};const saved=await api(i?`/api/invoices/${i.id}`:'/api/invoices',{method:i?'PUT':'POST',body:JSON.stringify(payload)});const id=i?.id||saved.id;const file=fd.get('pdf');if(file&&file.size){const up=new FormData();up.append('file',file);await api(`/api/invoices/${id}/pdf`,{method:'POST',body:up});}toast('تم حفظ الفاتورة');if(!i)await loadNotifications(true);if(opts.onSaved)await opts.onSaved(saved);else if(state.view==='invoices')await invoicesView(document.getElementById('main'));return true;});
  const f=document.getElementById('invoiceForm');const supplierCombo=wireSupplierCombobox(initialSupplier,!!lockedSupplier);f.elements.branch_id.value=i?.branch_id||'';const quick=document.getElementById('quickSupplier');if(quick)quick.onclick=()=>supplierModal(null,s=>{supplierCombo?.setSupplier(s.id);});}
 
+
+const PAYMENT_PLAN_STATUS_LABELS={planned:'مخطط',postponed:'مؤجل',overdue:'متأخر',due_today:'مستحق اليوم',completed:'تم السداد',cancelled:'ملغي'};
+function paymentPlanStatusBadge(p){
+  const st=p.display_status||p.status||'planned';
+  const cls=st==='completed'?'badge-green':st==='cancelled'?'badge-red':st==='overdue'?'badge-red':st==='due_today'?'badge-amber':st==='postponed'?'badge-blue':'badge-green';
+  let text=PAYMENT_PLAN_STATUS_LABELS[st]||st;
+  if(st==='overdue'&&Number.isFinite(Number(p.days_to_due)))text+=` · ${Math.abs(Number(p.days_to_due))} يوم`;
+  if((st==='planned'||st==='postponed')&&Number(p.days_to_due)>0)text+=` · بعد ${Number(p.days_to_due)} يوم`;
+  return `<span class="badge ${cls}">${esc(text)}</span>`;
+}
+function paymentPlanSummary(rows){
+  const out={overdue:0,due_today:0,next_7_days:0,later:0,open_total:0,open_count:0};
+  rows.forEach(p=>{
+    if(!['planned','postponed'].includes(p.status))return;
+    const amount=Number(p.planned_amount||0);out.open_total+=amount;out.open_count++;
+    if(p.display_status==='overdue')out.overdue+=amount;
+    else if(p.display_status==='due_today')out.due_today+=amount;
+    else if(Number(p.days_to_due)>0&&Number(p.days_to_due)<=7)out.next_7_days+=amount;
+    else out.later+=amount;
+  });return out;
+}
+function paymentPlanSummaryMarkup(rows){const d=paymentPlanSummary(rows);return `<div class="cards payment-plan-cards"><div class="stat plan-stat overdue"><div class="label">متأخر</div><div class="value">${money(d.overdue)}</div><div class="sub">مواعيد فات موعدها</div></div><div class="stat plan-stat today"><div class="label">مستحق اليوم</div><div class="value">${money(d.due_today)}</div><div class="sub">يحتاج إجراء اليوم</div></div><div class="stat plan-stat week"><div class="label">خلال 7 أيام</div><div class="value">${money(d.next_7_days)}</div><div class="sub">سيولة مطلوبة قريبًا</div></div><div class="stat plan-stat total"><div class="label">إجمالي المخطط المفتوح</div><div class="value">${money(d.open_total)}</div><div class="sub">${d.open_count} موعد مفتوح</div></div></div>`;}
+async function paymentPlansView(main){
+  if(!state.suppliers.length)state.suppliers=await api('/api/suppliers');
+  const data=await api('/api/payment-plans');state.paymentPlans=data.items||[];
+  main.innerHTML=`<div class="page-head"><div><h2>خطة السداد</h2><div class="muted">نظم مواعيد السداد واعرف المطلوب قبل موعده</div></div><div class="page-head-actions">${can('manage_payment_plans')?'<button class="btn btn-primary" id="addPaymentPlan">+ موعد سداد</button>':''}</div></div>
+  <div id="paymentPlanSummary"></div>
+  <section class="panel payment-plan-filter-panel"><div class="toolbar payment-plan-toolbar"><input class="input" id="paymentPlanSearch" placeholder="بحث باسم المورد..." value="${esc(state.paymentPlanSearch||'')}"><select class="select" id="paymentPlanBranch">${branchOptions(true,false)}</select><select class="select" id="paymentPlanStatus"><option value="open">المواعيد المفتوحة</option><option value="overdue">المتأخرة</option><option value="due_today">مستحقة اليوم</option><option value="upcoming">القادمة</option><option value="postponed">المؤجلة</option><option value="completed">تم السداد</option><option value="cancelled">الملغاة</option><option value="all">الكل</option></select></div></section><div id="paymentPlanRows"></div>`;
+  const branch=document.getElementById('paymentPlanBranch'),status=document.getElementById('paymentPlanStatus'),search=document.getElementById('paymentPlanSearch');branch.value=state.paymentPlanBranchId||'';status.value=state.paymentPlanStatus||'open';
+  if(can('manage_payment_plans'))document.getElementById('addPaymentPlan').onclick=()=>paymentPlanModal();
+  const refresh=()=>{state.paymentPlanBranchId=branch.value;state.paymentPlanStatus=status.value;state.paymentPlanSearch=search.value;renderPaymentPlanRows();};branch.oninput=refresh;status.oninput=refresh;search.oninput=refresh;renderPaymentPlanRows();
+}
+function renderPaymentPlanRows(){
+  const box=document.getElementById('paymentPlanRows'),summaryBox=document.getElementById('paymentPlanSummary');if(!box||!summaryBox)return;
+  const bid=state.paymentPlanBranchId||'',q=(state.paymentPlanSearch||'').trim().toLowerCase(),filter=state.paymentPlanStatus||'open';
+  const scope=state.paymentPlans.filter(p=>(!bid||p.branch_id===bid)&&(!q||(p.supplier_name||'').toLowerCase().includes(q)));
+  summaryBox.innerHTML=paymentPlanSummaryMarkup(scope);
+  const rows=scope.filter(p=>{if(filter==='all')return true;if(filter==='open')return ['planned','postponed'].includes(p.status);if(filter==='upcoming')return ['planned','postponed'].includes(p.status)&&Number(p.days_to_due)>0;if(filter==='postponed')return p.status==='postponed';return p.display_status===filter||p.status===filter;});
+  const priority={overdue:0,due_today:1,postponed:2,planned:3,completed:4,cancelled:5};rows.sort((a,b)=>(priority[a.display_status]??9)-(priority[b.display_status]??9)||String(a.planned_date).localeCompare(String(b.planned_date)));
+  const actions=p=>{const open=['planned','postponed'].includes(p.status);return `${open&&can('create_payments')&&can('manage_payment_plans')?`<button class="btn btn-primary btn-sm" data-plan-pay="${p.id}">تسجيل سداد</button>`:''}${open&&can('manage_payment_plans')?`<button class="btn btn-soft btn-sm" data-plan-postpone="${p.id}">تأجيل</button><button class="btn btn-ghost btn-sm" data-plan-edit="${p.id}">تعديل</button><button class="btn btn-danger btn-sm" data-plan-cancel="${p.id}">إلغاء</button>`:''}`;};
+  const completedInfo=p=>p.status==='completed'&&p.actual_amount!=null?`<div class="plan-actual">الفعلي: <strong>${money(p.actual_amount)}</strong>${p.actual_payment_date?` · ${esc(p.actual_payment_date)}`:''}</div>`:'';
+  box.innerHTML=`<div class="table-wrap desktop-table"><table><thead><tr><th>المورد</th><th>الفرع</th><th>المبلغ المخطط</th><th>الدين الحالي</th><th>موعد السداد</th><th>الحالة</th><th>ملاحظات</th><th></th></tr></thead><tbody>${rows.map(p=>`<tr><td><strong>${esc(p.supplier_name)}</strong>${Number(p.postpone_count)>0?`<div class="muted">تأجل ${Number(p.postpone_count)} مرة</div>`:''}</td><td>${esc(p.branch_name)}</td><td class="money">${money(p.planned_amount)}${completedInfo(p)}</td><td class="money">${money(p.current_balance)}</td><td><strong>${esc(p.planned_date)}</strong></td><td>${paymentPlanStatusBadge(p)}</td><td>${esc(p.notes||p.last_postpone_reason||'-')}</td><td><div class="actions">${actions(p)}</div></td></tr>`).join('')}</tbody></table></div><div class="mobile-list">${rows.map(p=>`<div class="item-card payment-plan-card"><div class="item-title"><span>${esc(p.supplier_name)}</span>${paymentPlanStatusBadge(p)}</div><div class="muted" style="margin-top:5px">${esc(p.branch_name)}</div><div class="item-meta"><div><span>المبلغ المخطط</span><b>${money(p.planned_amount)}</b>${completedInfo(p)}</div><div><span>موعد السداد</span><b>${esc(p.planned_date)}</b></div><div><span>الدين الحالي</span><b>${money(p.current_balance)}</b></div><div><span>مرات التأجيل</span>${Number(p.postpone_count||0)}</div></div>${p.notes?`<div class="plan-note">${esc(p.notes)}</div>`:''}<div class="item-actions">${actions(p)}</div></div>`).join('')||'<div class="empty">لا توجد مواعيد مطابقة</div>'}</div>`;
+  box.querySelectorAll('[data-plan-edit]').forEach(b=>b.onclick=()=>paymentPlanModal(state.paymentPlans.find(p=>p.id===b.dataset.planEdit)));
+  box.querySelectorAll('[data-plan-postpone]').forEach(b=>b.onclick=()=>paymentPlanPostponeModal(state.paymentPlans.find(p=>p.id===b.dataset.planPostpone)));
+  box.querySelectorAll('[data-plan-cancel]').forEach(b=>b.onclick=async()=>{if(!confirmAction('إلغاء موعد السداد؟ سيبقى محفوظًا في السجل كموعد ملغي.'))return;try{await api(`/api/payment-plans/${b.dataset.planCancel}/cancel`,{method:'POST'});toast('تم إلغاء الموعد');await paymentPlansView(document.getElementById('main'));}catch(e){toast(e.message,true);}});
+  box.querySelectorAll('[data-plan-pay]').forEach(b=>b.onclick=()=>{const p=state.paymentPlans.find(x=>x.id===b.dataset.planPay);if(!p)return;paymentModal(null,{supplierId:p.supplier_id,branchId:p.branch_id,plannedAmount:Number(p.planned_amount),onSaved:async saved=>{if(saved?.id){try{await api(`/api/payment-plans/${p.id}/complete`,{method:'POST',body:JSON.stringify({payment_id:saved.id})});toast('تم السداد وإغلاق الموعد');}catch(e){toast(`تم حفظ السداد لكن تعذر إغلاق الموعد: ${e.message}`,true);}}await paymentPlansView(document.getElementById('main'));}});});
+}
+function paymentPlanModal(plan=null){
+  showModal(`${plan?'تعديل':'إضافة'} موعد سداد`,`<form id="paymentPlanForm" class="form-grid"><div class="field"><label>المورد *</label><select class="select" name="supplier_id" required>${supplierOptions()}</select></div><div class="field"><label>الفرع *</label><select class="select" name="branch_id" required><option value="">اختر الفرع</option>${branchOptions(false)}</select></div><div class="field"><label>المبلغ المخطط *</label><input class="input" type="number" name="planned_amount" min="0.01" step="0.01" required value="${plan?.planned_amount??''}"></div><div class="field"><label>موعد السداد *</label><input class="input" type="date" name="planned_date" required value="${plan?.planned_date||isoToday()}"></div><div class="field full"><label>ملاحظات</label><textarea class="textarea" name="notes" placeholder="مثال: دفعة حسب الاتفاق مع الشركة">${esc(plan?.notes||'')}</textarea><div class="hint">النظام يمنع أن يتجاوز مجموع المبالغ المخططة الدين المتبقي للمورد في الفرع.</div></div></form>`,async()=>{const f=document.getElementById('paymentPlanForm');if(!f.reportValidity())return false;const fd=new FormData(f);const payload={supplier_id:fd.get('supplier_id'),branch_id:fd.get('branch_id'),planned_amount:Number(fd.get('planned_amount')),planned_date:fd.get('planned_date'),notes:fd.get('notes')||null};await api(plan?`/api/payment-plans/${plan.id}`:'/api/payment-plans',{method:plan?'PUT':'POST',body:JSON.stringify(payload)});toast('تم حفظ موعد السداد');await paymentPlansView(document.getElementById('main'));return true;});
+  const f=document.getElementById('paymentPlanForm');f.elements.supplier_id.value=plan?.supplier_id||'';f.elements.branch_id.value=plan?.branch_id||'';
+}
+function paymentPlanPostponeModal(plan){if(!plan)return;showModal('تأجيل موعد السداد',`<form id="postponePlanForm"><div class="field"><label>الموعد الحالي</label><input class="input" value="${esc(plan.planned_date)}" disabled></div><div class="field"><label>الموعد الجديد *</label><input class="input" type="date" name="planned_date" min="${isoToday()}" required></div><div class="field"><label>سبب التأجيل *</label><textarea class="textarea" name="reason" required minlength="2" placeholder="اكتب سبب التأجيل حتى نعرف سبب عدم الالتزام بالموعد"></textarea></div></form>`,async()=>{const f=document.getElementById('postponePlanForm');if(!f.reportValidity())return false;const fd=new FormData(f);await api(`/api/payment-plans/${plan.id}/postpone`,{method:'POST',body:JSON.stringify({planned_date:fd.get('planned_date'),reason:fd.get('reason')})});toast('تم تأجيل الموعد');await paymentPlansView(document.getElementById('main'));return true;});}
+
 async function paymentsView(main){
   const [payments]=await Promise.all([api('/api/payments'),state.suppliers.length?Promise.resolve():api('/api/suppliers').then(x=>state.suppliers=x)]);state.payments=payments||[];
   main.innerHTML=`<div class="page-head"><div><h2>السدادات</h2><div class="muted">كل سداد خاص بمورد واحد وفرع واحد ويمكن توزيعه على عدة فواتير</div></div><div class="page-head-actions">${can('create_payments')?'<button class="btn btn-primary" id="addPayment">+ سداد</button>':''}</div></div>
@@ -373,17 +431,18 @@ function renderPaymentRows(){const box=document.getElementById('paymentRows');if
  box.innerHTML=`<div class="table-wrap desktop-table"><table><thead><tr><th>التاريخ</th><th>المورد</th><th>الفرع</th><th>القيمة</th><th>الطريقة</th><th>التوزيع</th><th></th></tr></thead><tbody>${rows.map(p=>`<tr><td>${esc(p.payment_date)}</td><td><strong>${esc((p.suppliers||{}).name)}</strong></td><td>${esc((p.branches||{}).name)}</td><td class="money">${money(p.amount)}</td><td>${paymentMethod(p)}</td><td>${allocationText(p)}</td><td><div class="actions">${actions(p)}</div></td></tr>`).join('')}</tbody></table></div><div class="mobile-list">${rows.map(p=>`<div class="item-card"><div class="item-title"><span>${esc((p.suppliers||{}).name)}</span><span class="money">${money(p.amount)}</span></div><div class="muted" style="margin-top:5px">${esc((p.branches||{}).name)} — ${paymentMethod(p)}</div><div class="item-meta"><div><span>التاريخ</span>${esc(p.payment_date)}</div><div><span>الفواتير</span>${allocationText(p)||'-'}</div></div><div class="item-actions">${actions(p)}</div></div>`).join('')||'<div class="empty">لا توجد سدادات</div>'}</div>`;
  box.querySelectorAll('[data-edit]').forEach(b=>b.onclick=async()=>{try{const p=await api(`/api/payments/${b.dataset.edit}`);paymentModal(p);}catch(e){toast(e.message,true);}});box.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف السداد؟ سيتم إعادة المبالغ إلى أرصدة الفواتير.'))return;try{await api(`/api/payments/${b.dataset.delete}`,{method:'DELETE'});toast('تم حذف السداد');await paymentsView(document.getElementById('main'));}catch(e){toast(e.message,true);}});
 }
-function paymentModal(p=null,opts={}){const lockedSupplier=opts.supplierId||'';showModal(`${p?'تعديل':'إضافة'} سداد`,`<form id="paymentForm" class="form-grid">
+function paymentModal(p=null,opts={}){const lockedSupplier=opts.supplierId||'',lockedBranch=opts.branchId||'',plannedAmount=Number(opts.plannedAmount||0);showModal(`${p?'تعديل':'إضافة'} سداد`,`<form id="paymentForm" class="form-grid">
  <div class="field"><label>المورد *</label><select class="select" name="supplier_id" id="paySupplier" required>${supplierOptions()}</select></div><div class="field"><label>الفرع *</label><select class="select" name="branch_id" id="payBranch" required><option value="">اختر الفرع</option>${branchOptions(false)}</select></div>
  <div class="field"><label>تاريخ السداد *</label><input class="input" type="date" name="payment_date" required value="${p?.payment_date||isoToday()}"></div><div class="field"><label>طريقة السداد *</label><select class="select" name="method" id="payMethod"><option value="cash">نقدي</option><option value="bank">مصرف</option></select></div>
  <div class="field full hidden" id="bankField"><label>اسم المصرف *</label><input class="input" name="bank_name" value="${esc(p?.bank_name||'')}"></div><div class="field full"><label>ملاحظات</label><textarea class="textarea" name="notes">${esc(p?.notes||'')}</textarea></div>
- <div class="full"><div style="display:flex;justify-content:space-between;align-items:center"><strong>توزيع السداد على الفواتير</strong><span class="hint">اختر الفواتير واكتب المبلغ لكل فاتورة</span></div><div id="allocationList" class="allocation-list"><div class="empty">اختر المورد والفرع</div></div><div class="sum-box"><span>إجمالي السداد</span><span id="paymentSum">0.00 د.ل</span></div></div></form>`,async()=>{const f=document.getElementById('paymentForm');if(!f.reportValidity())return false;const selected=[...document.querySelectorAll('.alloc-check:checked')];const allocations=selected.map(c=>({invoice_id:c.dataset.id,amount:Number(document.querySelector(`[data-amount="${c.dataset.id}"]`).value||0)})).filter(x=>x.amount>0);const amount=allocations.reduce((s,x)=>s+x.amount,0);if(!allocations.length){toast('اختر فاتورة واحدة على الأقل وحدد مبلغ السداد',true);return false;}const fd=new FormData(f);const payload={supplier_id:lockedSupplier||fd.get('supplier_id'),branch_id:fd.get('branch_id'),amount:Number(amount.toFixed(2)),payment_date:fd.get('payment_date'),method:fd.get('method'),bank_name:fd.get('method')==='bank'?fd.get('bank_name'):null,notes:fd.get('notes')||null,allocations};await api(p?`/api/payments/${p.id}`:'/api/payments',{method:p?'PUT':'POST',body:JSON.stringify(payload)});toast('تم حفظ السداد');if(!p)await loadNotifications(true);if(opts.onSaved)await opts.onSaved();else if(state.view==='payments')await paymentsView(document.getElementById('main'));return true;},{large:true});
- const f=document.getElementById('paymentForm'),supplier=f.elements.supplier_id,branch=f.elements.branch_id,method=f.elements.method;supplier.value=p?.supplier_id||lockedSupplier||'';if(lockedSupplier)supplier.disabled=true;branch.value=p?.branch_id||'';method.value=p?.method||'cash';
+ ${plannedAmount>0?`<div class="full plan-payment-target"><span>المبلغ المخطط لهذا الموعد</span><strong>${money(plannedAmount)}</strong><small>تم اقتراح التوزيع تلقائيًا على أقدم الفواتير ويمكنك تعديله قبل الحفظ.</small></div>`:''}
+ <div class="full"><div style="display:flex;justify-content:space-between;align-items:center"><strong>توزيع السداد على الفواتير</strong><span class="hint">اختر الفواتير واكتب المبلغ لكل فاتورة</span></div><div id="allocationList" class="allocation-list"><div class="empty">اختر المورد والفرع</div></div><div class="sum-box"><span>إجمالي السداد</span><span id="paymentSum">0.00 د.ل</span></div></div></form>`,async()=>{const f=document.getElementById('paymentForm');if(!f.reportValidity())return false;const selected=[...document.querySelectorAll('.alloc-check:checked')];const allocations=selected.map(c=>({invoice_id:c.dataset.id,amount:Number(document.querySelector(`[data-amount="${c.dataset.id}"]`).value||0)})).filter(x=>x.amount>0);const amount=allocations.reduce((s,x)=>s+x.amount,0);if(!allocations.length){toast('اختر فاتورة واحدة على الأقل وحدد مبلغ السداد',true);return false;}const fd=new FormData(f);const payload={supplier_id:lockedSupplier||fd.get('supplier_id'),branch_id:lockedBranch||fd.get('branch_id'),amount:Number(amount.toFixed(2)),payment_date:fd.get('payment_date'),method:fd.get('method'),bank_name:fd.get('method')==='bank'?fd.get('bank_name'):null,notes:fd.get('notes')||null,allocations};const saved=await api(p?`/api/payments/${p.id}`:'/api/payments',{method:p?'PUT':'POST',body:JSON.stringify(payload)});toast('تم حفظ السداد');if(!p)await loadNotifications(true);if(opts.onSaved){try{await opts.onSaved(saved);}catch(e){toast(`تم حفظ السداد لكن تعذر تحديث العملية المرتبطة: ${e.message}`,true);}}else if(state.view==='payments')await paymentsView(document.getElementById('main'));return true;},{large:true});
+ const f=document.getElementById('paymentForm'),supplier=f.elements.supplier_id,branch=f.elements.branch_id,method=f.elements.method;supplier.value=p?.supplier_id||lockedSupplier||'';if(lockedSupplier)supplier.disabled=true;branch.value=p?.branch_id||lockedBranch||'';if(lockedBranch)branch.disabled=true;method.value=p?.method||'cash';
  const toggleBank=()=>{const bank=document.getElementById('bankField');bank.classList.toggle('hidden',method.value!=='bank');f.elements.bank_name.required=method.value==='bank';};method.onchange=toggleBank;toggleBank();
  let old={};(p?.payment_allocations||[]).forEach(a=>old[a.invoice_id]=Number(a.amount));
- const load=async()=>{const sid=supplier.value,bid=branch.value,box=document.getElementById('allocationList');if(!sid||!bid){box.innerHTML='<div class="empty">اختر المورد والفرع</div>';return;}box.innerHTML='<div class="loading">جاري تحميل الفواتير...</div>';try{const rows=await api(`/api/invoices?supplier_id=${encodeURIComponent(sid)}&branch_id=${encodeURIComponent(bid)}`);const available=rows.filter(i=>Number(i.balance)>0||old[i.id]);box.innerHTML=available.length?available.map(i=>{const current=old[i.id]||0;const max=Number(i.balance)+current;return `<label class="allocation-row"><input class="alloc-check" type="checkbox" data-id="${i.id}" ${current?'checked':''}><div class="desc"><strong>فاتورة ${esc(i.invoice_number)}</strong>المتبقي المتاح: ${money(max)} — ${esc(i.invoice_date)}</div><input class="input alloc-amount" data-amount="${i.id}" type="number" min="0" max="${max}" step="0.01" value="${current||''}" ${current?'':'disabled'}></label>`;}).join(''):'<div class="empty">لا توجد فواتير عليها رصيد لهذا المورد والفرع</div>';wireAllocations();}catch(e){box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;}};
+ const load=async()=>{const sid=lockedSupplier||supplier.value,bid=lockedBranch||branch.value,box=document.getElementById('allocationList');if(!sid||!bid){box.innerHTML='<div class="empty">اختر المورد والفرع</div>';return;}box.innerHTML='<div class="loading">جاري تحميل الفواتير...</div>';try{const rows=await api(`/api/invoices?supplier_id=${encodeURIComponent(sid)}&branch_id=${encodeURIComponent(bid)}`);const available=rows.filter(i=>Number(i.balance)>0||old[i.id]);const suggested={};if(!p&&plannedAmount>0){let remaining=plannedAmount;[...available].sort((a,b)=>String(a.invoice_date).localeCompare(String(b.invoice_date))).forEach(i=>{if(remaining<=0)return;const max=Number(i.balance||0);const take=Math.min(max,remaining);if(take>0){suggested[i.id]=Number(take.toFixed(2));remaining=Number((remaining-take).toFixed(2));}});}box.innerHTML=available.length?available.map(i=>{const current=old[i.id]||suggested[i.id]||0;const max=Number(i.balance)+Number(old[i.id]||0);return `<label class="allocation-row"><input class="alloc-check" type="checkbox" data-id="${i.id}" ${current?'checked':''}><div class="desc"><strong>فاتورة ${esc(i.invoice_number)}</strong>المتبقي المتاح: ${money(max)} — ${esc(i.invoice_date)}</div><input class="input alloc-amount" data-amount="${i.id}" type="number" min="0" max="${max}" step="0.01" value="${current||''}" ${current?'':'disabled'}></label>`;}).join(''):'<div class="empty">لا توجد فواتير عليها رصيد لهذا المورد والفرع</div>';wireAllocations();}catch(e){box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;}};
  const wireAllocations=()=>{document.querySelectorAll('.alloc-check').forEach(c=>c.onchange=()=>{const inp=document.querySelector(`[data-amount="${c.dataset.id}"]`);inp.disabled=!c.checked;if(!c.checked)inp.value='';updateSum();});document.querySelectorAll('.alloc-amount').forEach(i=>i.oninput=updateSum);updateSum();};
- const updateSum=()=>{const s=[...document.querySelectorAll('.alloc-check:checked')].reduce((sum,c)=>sum+Number(document.querySelector(`[data-amount="${c.dataset.id}"]`).value||0),0);document.getElementById('paymentSum').textContent=money(s);};supplier.onchange=load;branch.onchange=load;if(p)load();}
+ const updateSum=()=>{const s=[...document.querySelectorAll('.alloc-check:checked')].reduce((sum,c)=>sum+Number(document.querySelector(`[data-amount="${c.dataset.id}"]`).value||0),0);document.getElementById('paymentSum').textContent=money(s);};supplier.onchange=load;branch.onchange=load;if(p||(lockedSupplier&&lockedBranch))load();}
 
 async function settingsView(main){
   const tabsHtml=`${can('manage_branches')?'<button class="btn btn-soft" data-tab="branches">الفروع</button>':''}${can('manage_suppliers')?'<button class="btn btn-soft" data-tab="categories">تصنيفات الموردين</button>':''}${can('manage_users')?'<button class="btn btn-soft" data-tab="users">المستخدمين</button>':''}`;
