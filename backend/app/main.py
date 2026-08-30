@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from .core import FRONTEND, close_http_client
 from .routers import admin, auth, dashboard, invoices, items, notifications, payment_plans, payments, suppliers
 
-app = FastAPI(title="Abdo Debts API", version="13.0.0")
+app = FastAPI(title="Abdo Debts API", version="16.0.0")
 
 allowed_origins = [x.strip() for x in os.getenv("ALLOWED_ORIGINS", "").split(",") if x.strip()]
 if allowed_origins:

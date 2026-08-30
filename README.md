@@ -1,4 +1,4 @@
-# Abdo Debts — V13
+# Abdo Debts — V16
 
 برنامج مستقل لإدارة مديونيات الموردين، مبني بنفس فلسفة Abdo Supply لكن بقاعدة بيانات ومشروع منفصلين.
 
@@ -76,3 +76,10 @@ python run.py
 - The supplier field in Add/Edit Payment Plan is now searchable by supplier name.
 - The side arrow opens the full supplier list.
 - No database migration is required for V15.
+
+## V16 - قاعدة بيانات الأصناف المعتمدة
+- تم اعتماد ملف الأصناف المصدّر من منظومة الصيدلية كقاعدة أساسية لدليل الأصناف.
+- يحتوي المصدر على 8,105 صف و8,103 كود صنف فريد.
+- يتم حفظ كود الصنف كنص للحفاظ على الأكواد التي تبدأ بصفر.
+- ملف `supabase/migrations/V16_item_catalog_seed.sql` يضيف الأصناف الجديدة ويحدّث الموجودة حسب كود الصنف، ولا يحذف أصنافًا موجودة خارج الملف.
+- تم استخدام وحدة البيع من ملف المصدر في حقل دليل الأصناف، مع عدد الفرط داخل العلبة كما هو في المصدر.
