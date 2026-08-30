@@ -404,3 +404,35 @@ drop trigger if exists invoices_prevent_duplicate_number on public.invoices;
 create trigger invoices_prevent_duplicate_number
 before insert or update of supplier_id, invoice_number on public.invoices
 for each row execute function public.prevent_duplicate_supplier_invoice();
+
+-- V19 — Replace the item catalog without deleting historical movement reports.
+create or replace function public.reset_item_catalog()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_items integer := 0;
+  v_aliases integer := 0;
+  v_reports integer := 0;
+begin
+  select count(*) into v_items from public.item_catalog;
+  select count(*) into v_aliases from public.item_name_aliases;
+  select count(*) into v_reports from public.item_movement_reports;
+  delete from public.item_name_aliases;
+  delete from public.item_catalog;
+  update public.item_movement_rows mr
+     set item_id = null,
+         units_per_box = null,
+         equivalent_boxes = case when coalesce(mr.loose_sold, 0) = 0 then mr.boxes_sold else null end,
+         daily_rate = case when coalesce(mr.loose_sold, 0) = 0 and r.days_count > 0 then round((mr.boxes_sold / r.days_count)::numeric, 6) else null end,
+         matched_by = 'unmatched'
+    from public.item_movement_reports r
+   where mr.report_id = r.id;
+  update public.item_movement_reports set unresolved_count = unique_item_count;
+  return jsonb_build_object('ok', true, 'deleted_items', v_items, 'deleted_aliases', v_aliases, 'preserved_reports', v_reports);
+end;
+$$;
+revoke all on function public.reset_item_catalog() from public, anon, authenticated;
+grant execute on function public.reset_item_catalog() to service_role;

@@ -6,17 +6,25 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from openpyxl import load_workbook
+from pydantic import BaseModel
 
 from ..core import (
     SUPABASE_URL, ItemInput, api_headers, current_profile, get_http_client,
     require_permission, sb,
 )
+from ..xls_biff import read_first_sheet_rows
 
 router = APIRouter(prefix="/api/items", tags=["items"])
 
 MAX_EXCEL_BYTES = 12 * 1024 * 1024
 MAX_PREVIEW_ROWS = 20
 MAX_PREVIEW_COLS = 30
+MAX_IMPORT_ROWS = 50000
+XLS_SHEET_NAME = "الورقة الأولى"
+
+
+class CatalogResetInput(BaseModel):
+    confirmation: str
 
 
 def _clean_text(value: Any) -> str:
@@ -41,14 +49,21 @@ def _parse_units(value: Any) -> int | None:
 
 async def _read_excel_bytes(file: UploadFile) -> bytes:
     name = (file.filename or "").lower()
-    if not name.endswith(".xlsx"):
-        raise HTTPException(422, "الاستيراد الحالي يدعم ملفات Excel بصيغة .xlsx فقط")
+    if not (name.endswith(".xlsx") or name.endswith(".xls")):
+        raise HTTPException(422, "ارفع دليل الأصناف بصيغة .xls أو .xlsx")
     content = await file.read(MAX_EXCEL_BYTES + 1)
     if len(content) > MAX_EXCEL_BYTES:
         raise HTTPException(413, "حجم ملف Excel أكبر من 12 MB")
     if not content:
         raise HTTPException(422, "ملف Excel فارغ")
     return content
+
+
+def _xls_rows(content: bytes, *, max_rows: int) -> list[list[Any]]:
+    try:
+        return read_first_sheet_rows(content, max_rows=max_rows, max_cols=MAX_PREVIEW_COLS)
+    except Exception as exc:
+        raise HTTPException(422, "تعذر قراءة ملف .xls") from exc
 
 
 def _content_range_total(value: str | None) -> int | None:
@@ -173,6 +188,18 @@ async def update_item(item_id: str, data: ItemInput, profile: dict[str, Any] = D
     return rows[0]
 
 
+@router.post("/catalog/reset")
+async def reset_catalog(
+    data: CatalogResetInput,
+    profile: dict[str, Any] = Depends(current_profile),
+) -> Any:
+    require_permission(profile, "manage_item_catalog")
+    if data.confirmation.strip() != "حذف الدليل":
+        raise HTTPException(422, "اكتب: حذف الدليل — لتأكيد العملية")
+    result = await sb("POST", "/rest/v1/rpc/reset_item_catalog", service=True, json={})
+    return result or {"ok": True}
+
+
 @router.delete("/{item_id}")
 async def delete_item(item_id: str, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "manage_item_catalog")
@@ -187,6 +214,25 @@ async def preview_item_excel(
 ) -> Any:
     require_permission(profile, "manage_item_catalog")
     content = await _read_excel_bytes(file)
+    filename = (file.filename or "").lower()
+    if filename.endswith(".xls"):
+        source_rows = _xls_rows(content, max_rows=MAX_PREVIEW_ROWS)
+        rows: list[list[str]] = []
+        for row in source_rows[:MAX_PREVIEW_ROWS]:
+            values = [_clean_text(v) for v in row[:MAX_PREVIEW_COLS]]
+            while values and values[-1] == "":
+                values.pop()
+            rows.append(values)
+        suggested_columns = None
+        if rows and len(rows[0]) >= 5 and _parse_units(rows[0][0]) is not None and _clean_text(rows[0][1]) and _clean_text(rows[0][4]):
+            suggested_columns = {"units": 1, "name": 2, "package": 3, "code": 5}
+        return {
+            "filename": file.filename,
+            "sheets": [{"name": XLS_SHEET_NAME, "rows": rows}],
+            "suggested_header_row": 0 if suggested_columns else 1,
+            "suggested_columns": suggested_columns,
+        }
+
     try:
         wb = load_workbook(BytesIO(content), read_only=True, data_only=True)
     except Exception as exc:
@@ -217,46 +263,58 @@ async def import_item_excel(
     profile: dict[str, Any] = Depends(current_profile),
 ) -> Any:
     require_permission(profile, "manage_item_catalog")
-    if header_row < 1 or min(code_column, name_column, units_column) < 1:
+    if header_row < 0 or min(code_column, name_column, units_column) < 1:
         raise HTTPException(422, "تحديد الأعمدة غير صالح")
 
     content = await _read_excel_bytes(file)
-    try:
-        wb = load_workbook(BytesIO(content), read_only=True, data_only=True)
-    except Exception as exc:
-        raise HTTPException(422, "تعذر قراءة ملف Excel") from exc
-    if sheet_name not in wb.sheetnames:
-        wb.close()
-        raise HTTPException(422, "ورقة Excel المحددة غير موجودة")
+    filename = (file.filename or "").lower()
+    wb = None
+    if filename.endswith(".xls"):
+        if sheet_name != XLS_SHEET_NAME:
+            raise HTTPException(422, "ورقة ملف .xls المحددة غير موجودة")
+        all_rows = _xls_rows(content, max_rows=MAX_IMPORT_ROWS)
+        row_iter = iter(all_rows[header_row:])
+    else:
+        try:
+            wb = load_workbook(BytesIO(content), read_only=True, data_only=True)
+        except Exception as exc:
+            raise HTTPException(422, "تعذر قراءة ملف Excel") from exc
+        if sheet_name not in wb.sheetnames:
+            wb.close()
+            raise HTTPException(422, "ورقة Excel المحددة غير موجودة")
+        ws = wb[sheet_name]
+        row_iter = ws.iter_rows(min_row=header_row + 1, values_only=True)
 
-    ws = wb[sheet_name]
     items_by_code: dict[str, dict[str, Any]] = {}
     skipped = 0
     invalid_examples: list[str] = []
     max_col = max(code_column, name_column, units_column, package_column or 0)
 
-    for row_number, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
-        values = list(row)
-        if not any(v not in (None, "") for v in values):
-            continue
-        if len(values) < max_col:
-            values.extend([None] * (max_col - len(values)))
-        code = _clean_text(values[code_column - 1])
-        name = _clean_text(values[name_column - 1])
-        units = _parse_units(values[units_column - 1])
-        package = _clean_text(values[package_column - 1]) if package_column else ""
-        if not code or not name or units is None:
-            skipped += 1
-            if len(invalid_examples) < 8:
-                invalid_examples.append(f"صف {row_number}")
-            continue
-        items_by_code[code] = {
-            "item_code": code[:160],
-            "item_name": name[:240],
-            "package_form": package[:120] or None,
-            "units_per_box": units,
-        }
-    wb.close()
+    try:
+        for row_number, row in enumerate(row_iter, start=header_row + 1):
+            values = list(row)
+            if not any(v not in (None, "") for v in values):
+                continue
+            if len(values) < max_col:
+                values.extend([None] * (max_col - len(values)))
+            code = _clean_text(values[code_column - 1])
+            name = _clean_text(values[name_column - 1])
+            units = _parse_units(values[units_column - 1])
+            package = _clean_text(values[package_column - 1]) if package_column else ""
+            if not code or not name or units is None:
+                skipped += 1
+                if len(invalid_examples) < 8:
+                    invalid_examples.append(f"صف {row_number}")
+                continue
+            items_by_code[code] = {
+                "item_code": code[:160],
+                "item_name": name[:240],
+                "package_form": package[:120] or None,
+                "units_per_box": units,
+            }
+    finally:
+        if wb is not None:
+            wb.close()
 
     now = datetime.now(timezone.utc).isoformat()
     for item in items_by_code.values():
