@@ -7,10 +7,11 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from openpyxl import load_workbook
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core import (
     apply_branch_filter,
@@ -31,6 +32,13 @@ LOOSE_UNIT = "فرط"
 
 class MovementMapInput(BaseModel):
     item_id: str
+
+
+class MovementCatalogCreateInput(BaseModel):
+    item_code: str | None = Field(default=None, max_length=160)
+    item_name: str | None = Field(default=None, max_length=240)
+    package_form: str | None = Field(default=None, max_length=120)
+    units_per_box: int = Field(gt=0, le=100000)
 
 
 def _text(value: Any) -> str:
@@ -294,6 +302,46 @@ async def _report(report_id: str, profile: dict[str, Any]) -> dict[str, Any]:
     return rows[0]
 
 
+async def _link_movement_row(
+    movement: dict[str, Any],
+    report: dict[str, Any],
+    item: dict[str, Any],
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    units = int(item["units_per_box"])
+    equivalent = round(
+        float(movement.get("boxes_sold") or 0)
+        + float(movement.get("loose_sold") or 0) / units,
+        6,
+    )
+    daily = round(equivalent / int(report["days_count"]), 6)
+    updated = await sb(
+        "PATCH", "/rest/v1/item_movement_rows", service=True,
+        headers={"Prefer": "return=representation"}, params={"id": f"eq.{movement['id']}"},
+        json={
+            "item_id": item["id"], "units_per_box": units,
+            "equivalent_boxes": equivalent, "daily_rate": daily, "matched_by": "manual",
+        },
+    )
+    await sb(
+        "POST", "/rest/v1/item_name_aliases?on_conflict=report_name_norm", service=True,
+        headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+        json={
+            "report_name": movement["report_name"], "report_name_norm": movement["report_name_norm"],
+            "item_id": item["id"], "created_by": profile["id"], "updated_at": datetime.utcnow().isoformat() + "Z",
+        },
+    )
+    unresolved = await sb(
+        "GET", "/rest/v1/item_movement_rows", service=True,
+        params={"select": "id", "report_id": f"eq.{movement['report_id']}", "item_id": "is.null", "limit": "10000"},
+    )
+    await sb(
+        "PATCH", "/rest/v1/item_movement_reports", service=True,
+        params={"id": f"eq.{movement['report_id']}"}, json={"unresolved_count": len(unresolved or [])},
+    )
+    return updated[0]
+
+
 @router.post("/preview")
 async def preview_report(
     branch_id: str = Form(...),
@@ -427,7 +475,7 @@ async def map_report_row(
     require_permission(profile, "manage_item_catalog")
     movement_rows = await sb(
         "GET", "/rest/v1/item_movement_rows", service=True,
-        params={"select": "id,report_id,report_name,report_name_norm,boxes_sold,loose_sold", "id": f"eq.{row_id}", "limit": "1"},
+        params={"select": "id,report_id,report_name,report_name_norm,boxes_sold,loose_sold,item_id", "id": f"eq.{row_id}", "limit": "1"},
     )
     if not movement_rows:
         raise HTTPException(404, "سطر الحركة غير موجود")
@@ -440,34 +488,56 @@ async def map_report_row(
     if not catalog:
         raise HTTPException(422, "الصنف المختار غير موجود في دليل الأصناف")
     item = catalog[0]
-    units = int(item["units_per_box"])
-    equivalent = round(float(movement.get("boxes_sold") or 0) + float(movement.get("loose_sold") or 0) / units, 6)
-    daily = round(equivalent / int(report["days_count"]), 6)
-    updated = await sb(
-        "PATCH", "/rest/v1/item_movement_rows", service=True,
-        headers={"Prefer": "return=representation"}, params={"id": f"eq.{row_id}"},
-        json={
-            "item_id": item["id"], "units_per_box": units,
-            "equivalent_boxes": equivalent, "daily_rate": daily, "matched_by": "manual",
-        },
-    )
-    await sb(
-        "POST", "/rest/v1/item_name_aliases?on_conflict=report_name_norm", service=True,
-        headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
-        json={
-            "report_name": movement["report_name"], "report_name_norm": movement["report_name_norm"],
-            "item_id": item["id"], "created_by": profile["id"], "updated_at": datetime.utcnow().isoformat() + "Z",
-        },
-    )
-    unresolved = await sb(
+    return await _link_movement_row(movement, report, item, profile)
+
+
+@router.post("/rows/{row_id}/add-to-catalog")
+async def add_report_row_to_catalog(
+    row_id: str,
+    data: MovementCatalogCreateInput,
+    profile: dict[str, Any] = Depends(current_profile),
+) -> Any:
+    require_permission(profile, "manage_item_catalog")
+    movement_rows = await sb(
         "GET", "/rest/v1/item_movement_rows", service=True,
-        params={"select": "id", "report_id": f"eq.{movement['report_id']}", "item_id": "is.null", "limit": "10000"},
+        params={
+            "select": "id,report_id,report_name,report_name_norm,boxes_sold,loose_sold,item_id",
+            "id": f"eq.{row_id}", "limit": "1",
+        },
     )
-    await sb(
-        "PATCH", "/rest/v1/item_movement_reports", service=True,
-        params={"id": f"eq.{movement['report_id']}"}, json={"unresolved_count": len(unresolved or [])},
+    if not movement_rows:
+        raise HTTPException(404, "سطر الحركة غير موجود")
+    movement = movement_rows[0]
+    if movement.get("item_id"):
+        raise HTTPException(409, "هذا الصنف مرتبط بالفعل بدليل الأصناف")
+    report = await _report(str(movement["report_id"]), profile)
+
+    code = (data.item_code or "").strip()
+    if not code:
+        code = f"MOV-{uuid4().hex[:16].upper()}"
+    existing = await sb(
+        "GET", "/rest/v1/item_catalog", service=True,
+        params={"select": "id", "item_code": f"eq.{code}", "limit": "1"},
     )
-    return updated[0]
+    if existing:
+        raise HTTPException(409, "يوجد صنف بنفس الكود؛ استخدم كودًا آخر أو طابق الصنف الموجود")
+
+    item_name = (data.item_name or movement["report_name"] or "").strip()
+    if not item_name:
+        raise HTTPException(422, "اسم الصنف مطلوب")
+    created = await sb(
+        "POST", "/rest/v1/item_catalog", service=True,
+        headers={"Prefer": "return=representation"},
+        json={
+            "item_code": code,
+            "item_name": item_name,
+            "package_form": (data.package_form or "").strip() or None,
+            "units_per_box": data.units_per_box,
+        },
+    )
+    item = created[0]
+    linked = await _link_movement_row(movement, report, item, profile)
+    return {"ok": True, "item": item, "row": linked, "generated_code": not bool((data.item_code or "").strip())}
 
 
 @router.delete("/reports/{report_id}")
