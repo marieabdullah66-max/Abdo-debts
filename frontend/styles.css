@@ -77,3 +77,8 @@
 
 /* V19 — Replaceable item catalog */
 .catalog-reset-warning{border:1px solid #efc3c3;background:#fff4f4;border-radius:14px;padding:13px 14px;margin-bottom:14px;line-height:1.7}.catalog-reset-warning strong{color:#9b2c2c}.catalog-reset-warning p{margin:5px 0 0;color:#6f4a4a;font-size:12px}
+
+/* V21 — Movement sorting and PDF export */
+.movement-filters{grid-template-columns:1fr 1.55fr 1fr 1fr}.movement-report-info .actions{display:flex;gap:7px;flex-wrap:wrap}
+@media(max-width:800px){.movement-filters{grid-template-columns:1fr 1fr}.movement-filters .field:nth-child(2){grid-column:1/-1;grid-row:auto}}
+@media(max-width:500px){.movement-filters{grid-template-columns:1fr}.movement-filters .field:nth-child(2){grid-column:auto}.movement-report-info .actions{width:100%}.movement-report-info .actions .btn{flex:1 1 auto}}
