@@ -233,15 +233,19 @@ def _resolve_rows(
     for normalized, aggregate in aggregates.items():
         item = None
         matched_by = "unmatched"
-        alias_item_id = aliases.get(normalized)
-        if alias_item_id and alias_item_id in by_id:
-            item = by_id[alias_item_id]
-            matched_by = "alias"
+        # The current catalog name is the primary source of truth. Learned
+        # aliases are used when the report spelling is not a unique current
+        # catalog name. This avoids an old alias overriding a newly imported
+        # canonical name that now belongs to another code.
+        exact = by_name.get(normalized) or []
+        if len(exact) == 1:
+            item = exact[0]
+            matched_by = "exact"
         else:
-            exact = by_name.get(normalized) or []
-            if len(exact) == 1:
-                item = exact[0]
-                matched_by = "exact"
+            alias_item_id = aliases.get(normalized)
+            if alias_item_id and alias_item_id in by_id:
+                item = by_id[alias_item_id]
+                matched_by = "alias"
 
         boxes = round(float(aggregate["boxes_sold"]), 6)
         loose = round(float(aggregate["loose_sold"]), 6)

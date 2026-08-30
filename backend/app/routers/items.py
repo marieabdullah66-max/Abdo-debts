@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any
+import unicodedata
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from openpyxl import load_workbook
@@ -34,6 +35,43 @@ def _clean_text(value: Any) -> str:
         return str(int(value)).strip()
     return str(value).strip()
 
+
+
+
+def _normalize_item_name(value: str) -> str:
+    value = unicodedata.normalize("NFKC", value or "").casefold().strip()
+    return " ".join(value.split())
+
+
+async def _all_catalog_items() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for offset in range(0, 30000, 1000):
+        page = await sb(
+            "GET", "/rest/v1/item_catalog", service=True,
+            params={
+                "select": "id,item_code,item_name,package_form,units_per_box",
+                "order": "item_code.asc",
+            },
+            headers={"Range": f"{offset}-{offset + 999}"},
+        )
+        rows.extend(page or [])
+        if len(page or []) < 1000:
+            break
+    return rows
+
+
+async def _all_item_aliases() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for offset in range(0, 50000, 1000):
+        page = await sb(
+            "GET", "/rest/v1/item_name_aliases", service=True,
+            params={"select": "id,report_name,report_name_norm,item_id", "order": "created_at.asc"},
+            headers={"Range": f"{offset}-{offset + 999}"},
+        )
+        rows.extend(page or [])
+        if len(page or []) < 1000:
+            break
+    return rows
 
 def _parse_units(value: Any) -> int | None:
     if value is None or value == "":
@@ -285,7 +323,11 @@ async def import_item_excel(
         ws = wb[sheet_name]
         row_iter = ws.iter_rows(min_row=header_row + 1, values_only=True)
 
+    # One catalog row per item code. If the same code appears with more than one
+    # spelling in the imported file, the last spelling becomes the visible name
+    # and all other spellings are learned as aliases for the same catalog item.
     items_by_code: dict[str, dict[str, Any]] = {}
+    names_by_code: dict[str, dict[str, str]] = {}
     skipped = 0
     invalid_examples: list[str] = []
     max_col = max(code_column, name_column, units_column, package_column or 0)
@@ -306,9 +348,22 @@ async def import_item_excel(
                 if len(invalid_examples) < 8:
                     invalid_examples.append(f"صف {row_number}")
                 continue
+
+            code = code[:160]
+            name = name[:240]
+            normalized_name = _normalize_item_name(name)
+            if not normalized_name:
+                skipped += 1
+                if len(invalid_examples) < 8:
+                    invalid_examples.append(f"صف {row_number}")
+                continue
+
+            names_by_code.setdefault(code, {})[normalized_name] = name
+            # Preserve the previous import behavior: the last row for a repeated
+            # code is the current/master representation of that code.
             items_by_code[code] = {
-                "item_code": code[:160],
-                "item_name": name[:240],
+                "item_code": code,
+                "item_name": name,
                 "package_form": package[:120] or None,
                 "units_per_box": units,
             }
@@ -316,27 +371,153 @@ async def import_item_excel(
         if wb is not None:
             wb.close()
 
-    now = datetime.now(timezone.utc).isoformat()
-    for item in items_by_code.values():
-        item["updated_at"] = now
     rows = list(items_by_code.values())
     if not rows:
         raise HTTPException(422, "لم يتم العثور على أصناف صالحة للاستيراد حسب الأعمدة المحددة")
 
-    imported = 0
-    for start in range(0, len(rows), 400):
-        batch = rows[start:start + 400]
+    before_catalog = await _all_catalog_items()
+    before_by_code = {str(x.get("item_code") or ""): x for x in before_catalog}
+
+    new_items = 0
+    same_name_codes = 0
+    renamed_codes = 0
+    alias_candidates_by_code: dict[str, dict[str, str]] = {}
+
+    for code, incoming in items_by_code.items():
+        existing = before_by_code.get(code)
+        incoming_norm = _normalize_item_name(str(incoming.get("item_name") or ""))
+        candidate_names = dict(names_by_code.get(code) or {})
+        if existing:
+            old_name = str(existing.get("item_name") or "").strip()
+            old_norm = _normalize_item_name(old_name)
+            if old_norm == incoming_norm:
+                same_name_codes += 1
+            else:
+                renamed_codes += 1
+                if old_norm:
+                    candidate_names[old_norm] = old_name
+        else:
+            new_items += 1
+
+        # The current imported spelling becomes item_catalog.item_name after the
+        # upsert, so it does not need a duplicate alias row.
+        candidate_names.pop(incoming_norm, None)
+        if candidate_names:
+            alias_candidates_by_code[code] = candidate_names
+
+    now = datetime.now(timezone.utc).isoformat()
+    payload = []
+    for item in rows:
+        payload.append({**item, "updated_at": now})
+
+    # item_code is the immutable identity: existing codes are updated in place,
+    # while unseen codes become new catalog items.
+    for start in range(0, len(payload), 400):
         await sb(
             "POST", "/rest/v1/item_catalog?on_conflict=item_code", service=True,
             headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
-            json=batch,
+            json=payload[start:start + 400],
         )
-        imported += len(batch)
+
+    after_catalog = await _all_catalog_items()
+    after_by_code = {str(x.get("item_code") or ""): x for x in after_catalog}
+    canonical_norm_to_ids: dict[str, set[str]] = {}
+    for item in after_catalog:
+        norm = _normalize_item_name(str(item.get("item_name") or ""))
+        if norm:
+            canonical_norm_to_ids.setdefault(norm, set()).add(str(item.get("id") or ""))
+
+    existing_alias_rows = await _all_item_aliases()
+    existing_aliases = {
+        str(x.get("report_name_norm") or ""): str(x.get("item_id") or "")
+        for x in existing_alias_rows
+        if x.get("report_name_norm")
+    }
+
+    pending_aliases: dict[str, dict[str, Any]] = {}
+    blocked_alias_norms: set[str] = set()
+    aliases_already_known = 0
+    alias_conflicts = 0
+    alias_conflict_examples: list[str] = []
+
+    for code, names in alias_candidates_by_code.items():
+        item = after_by_code.get(code)
+        if not item:
+            continue
+        item_id = str(item.get("id") or "")
+        for norm, display_name in names.items():
+            if not norm or norm in blocked_alias_norms:
+                continue
+
+            alias_item_id = existing_aliases.get(norm)
+            if alias_item_id:
+                if alias_item_id == item_id:
+                    aliases_already_known += 1
+                else:
+                    alias_conflicts += 1
+                    if len(alias_conflict_examples) < 8:
+                        alias_conflict_examples.append(f"{display_name} — الكود {code}")
+                continue
+
+            # A name that is already the canonical name of another code is
+            # ambiguous. Do not silently teach a wrong mapping.
+            canonical_ids = canonical_norm_to_ids.get(norm) or set()
+            if canonical_ids and canonical_ids != {item_id}:
+                alias_conflicts += 1
+                if len(alias_conflict_examples) < 8:
+                    alias_conflict_examples.append(f"{display_name} — الكود {code}")
+                continue
+            if canonical_ids == {item_id}:
+                aliases_already_known += 1
+                continue
+
+            previous_pending = pending_aliases.get(norm)
+            if previous_pending:
+                if str(previous_pending.get("item_id") or "") == item_id:
+                    aliases_already_known += 1
+                else:
+                    # The same spelling appeared as an alias for two different
+                    # codes in this import. Do not pick one silently.
+                    alias_conflicts += 1
+                    pending_aliases.pop(norm, None)
+                    blocked_alias_norms.add(norm)
+                    if len(alias_conflict_examples) < 8:
+                        alias_conflict_examples.append(f"{display_name} — الكود {code}")
+                continue
+
+            pending_aliases[norm] = {
+                "report_name": display_name[:300],
+                "report_name_norm": norm[:300],
+                "item_id": item_id,
+                "created_by": profile.get("id"),
+                "updated_at": now,
+            }
+
+    aliases_to_insert = list(pending_aliases.values())
+    for start in range(0, len(aliases_to_insert), 400):
+        await sb(
+            "POST", "/rest/v1/item_name_aliases?on_conflict=report_name_norm", service=True,
+            headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
+            json=aliases_to_insert[start:start + 400],
+        )
 
     return {
         "ok": True,
-        "imported": imported,
+        "imported": len(rows),
+        "processed_codes": len(rows),
+        "new_items": new_items,
+        "existing_codes": len(rows) - new_items,
+        "same_name_codes": same_name_codes,
+        "renamed_codes": renamed_codes,
+        "aliases_added": len(aliases_to_insert),
+        "aliases_already_known": aliases_already_known,
+        "alias_conflicts": alias_conflicts,
+        "alias_conflict_examples": alias_conflict_examples,
         "skipped": skipped,
         "invalid_examples": invalid_examples,
-        "message": "تم تحديث دليل الأصناف؛ الأكواد الموجودة تم تحديثها والجديدة تمت إضافتها",
+        "message": (
+            "تم تحديث دليل الأصناف حسب الكود؛ الاسم الأحدث أصبح الاسم الظاهر، "
+            "والأسماء السابقة/البديلة تم حفظها لنفس الصنف حتى تتعرف عليها تقارير الحركة"
+        ),
     }
+
