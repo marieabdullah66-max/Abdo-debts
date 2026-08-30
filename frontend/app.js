@@ -15,6 +15,11 @@ const state = {
   dashboardFromDate: '',
   dashboardToDate: '',
   itemsTab: 'catalog',
+  itemCatalogTotal: 0,
+  itemCatalogShowAll: false,
+  itemCatalogSearch: '',
+  itemCatalogSearchTimer: null,
+  itemCatalogRequestSeq: 0,
   paymentPlanBranchId: '',
   paymentPlanStatus: 'open',
   paymentPlanSearch: '',
@@ -314,26 +319,47 @@ async function renderItemsTab(){
     box.innerHTML=`<section class="panel movement-coming"><h3>تحليل حركة الأصناف</h3><p>هذا الجزء جاهز للربط بتقرير حركة الشهر بعد ما نشوف شكل التقرير الحقيقي.</p><div class="formula-card"><small>الحساب المتفق عليه</small><strong>العلب المكافئة = العلب المباعة + (الفرط المباع ÷ الفرط في العلبة)</strong><strong>معدل البيع اليومي = العلب المكافئة ÷ عدد أيام الشهر</strong></div><div class="hint">لن نربط تقرير الحركة أو نفترض أسماء أعمدته قبل مراجعة ملف فعلي.</div></section>`;
     return;
   }
-  box.innerHTML='<div class="loading">جاري تحميل دليل الأصناف...</div>';
-  state.items=await api('/api/items?limit=30000');
-  box.innerHTML=`<div class="page-head item-catalog-head"><div><h3>دليل الأصناف</h3><div class="muted"><span id="itemCount">${state.items.length}</span> صنف</div></div>${can('manage_item_catalog')?`<div class="page-head-actions"><button class="btn btn-soft" id="importItems">استيراد Excel</button><button class="btn btn-primary" id="addItem">+ صنف</button></div>`:''}</div>
-  <div class="toolbar item-toolbar"><input class="input" id="itemSearch" placeholder="بحث بالكود أو اسم الصنف..."></div>
-  <div id="itemRows"></div>`;
-  document.getElementById('itemSearch').oninput=renderItemRows;
+  state.itemCatalogShowAll=false;
+  box.innerHTML=`<div class="page-head item-catalog-head"><div><h3>دليل الأصناف</h3><div class="muted" id="itemCount">جاري تحميل الأصناف...</div></div>${can('manage_item_catalog')?`<div class="page-head-actions"><button class="btn btn-soft" id="importItems">استيراد Excel</button><button class="btn btn-primary" id="addItem">+ صنف</button></div>`:''}</div>
+  <div class="toolbar item-toolbar"><input class="input" id="itemSearch" value="${esc(state.itemCatalogSearch)}" placeholder="بحث سريع بالكود أو اسم الصنف..."><button class="btn btn-soft item-view-toggle" id="itemViewToggle" type="button" hidden>إظهار الكل</button></div>
+  <div id="itemRows"><div class="loading">جاري تحميل أول 100 صنف...</div></div>`;
+  const searchInput=document.getElementById('itemSearch');
+  searchInput.oninput=()=>{state.itemCatalogSearch=searchInput.value;state.itemCatalogShowAll=false;clearTimeout(state.itemCatalogSearchTimer);state.itemCatalogSearchTimer=setTimeout(()=>loadItemCatalog(true),280);};
+  document.getElementById('itemViewToggle').onclick=async()=>{state.itemCatalogShowAll=!state.itemCatalogShowAll;await loadItemCatalog(true);};
   if(can('manage_item_catalog')){document.getElementById('addItem').onclick=()=>itemModal();document.getElementById('importItems').onclick=()=>itemImportModal();}
-  renderItemRows();
+  await loadItemCatalog(false);
+}
+
+async function loadItemCatalog(showLoading=false){
+  const box=document.getElementById('itemRows');if(!box)return;
+  const requestId=++state.itemCatalogRequestSeq;
+  const q=(document.getElementById('itemSearch')?.value||state.itemCatalogSearch||'').trim();
+  state.itemCatalogSearch=q;
+  const limit=state.itemCatalogShowAll?30000:100;
+  if(showLoading)box.innerHTML=`<div class="loading">${state.itemCatalogShowAll?'جاري تحميل كل الأصناف...':'جاري البحث...'}</div>`;
+  try{
+    const params=new URLSearchParams({limit:String(limit),with_meta:'true'});if(q)params.set('search',q);
+    const data=await api(`/api/items?${params.toString()}`);
+    if(requestId!==state.itemCatalogRequestSeq)return;
+    state.items=Array.isArray(data)?data:(data.items||[]);
+    state.itemCatalogTotal=Array.isArray(data)?state.items.length:Number(data.total||0);
+    renderItemRows();
+  }catch(e){if(requestId!==state.itemCatalogRequestSeq)return;box.innerHTML=`<div class="panel"><div class="empty">${esc(e.message)}</div></div>`;toast(e.message,true);}
 }
 
 function renderItemRows(){
   const box=document.getElementById('itemRows');if(!box)return;
-  const q=(document.getElementById('itemSearch')?.value||'').trim().toLowerCase();
-  const rows=state.items.filter(x=>!q||String(x.item_code||'').toLowerCase().includes(q)||String(x.item_name||'').toLowerCase().includes(q));
-  const count=document.getElementById('itemCount');if(count)count.textContent=rows.length;
+  const rows=state.items;
+  const q=(state.itemCatalogSearch||'').trim();
+  const count=document.getElementById('itemCount');
+  if(count)count.textContent=q?`عرض ${rows.length.toLocaleString('en-US')} من ${state.itemCatalogTotal.toLocaleString('en-US')} نتيجة`:`عرض ${rows.length.toLocaleString('en-US')} من ${state.itemCatalogTotal.toLocaleString('en-US')} صنف`;
+  const toggle=document.getElementById('itemViewToggle');
+  if(toggle){const hasMore=state.itemCatalogTotal>100;toggle.hidden=!state.itemCatalogShowAll&&!hasMore;toggle.textContent=state.itemCatalogShowAll?'عرض 100 فقط':'إظهار الكل';}
   const actions=x=>can('manage_item_catalog')?`<div class="actions"><button class="btn btn-ghost btn-sm" data-item-edit="${x.id}">تعديل</button><button class="btn btn-danger btn-sm" data-item-delete="${x.id}">حذف</button></div>`:'';
   box.innerHTML=rows.length?`<div class="table-wrap desktop-table"><table><thead><tr><th>الكود</th><th>اسم الصنف</th><th>وحدة البيع</th><th>فرط / علبة</th>${can('manage_item_catalog')?'<th>إجراءات</th>':''}</tr></thead><tbody>${rows.map(x=>`<tr><td><strong>${esc(x.item_code)}</strong></td><td>${esc(x.item_name)}</td><td>${esc(x.package_form||'—')}</td><td><strong>${Number(x.units_per_box||0).toLocaleString('en-US')}</strong></td>${can('manage_item_catalog')?`<td>${actions(x)}</td>`:''}</tr>`).join('')}</tbody></table></div>
   <div class="mobile-list">${rows.map(x=>`<div class="item-card"><div class="item-title"><span>${esc(x.item_name)}</span><strong>${esc(x.item_code)}</strong></div><div class="item-meta"><div><span>وحدة البيع</span>${esc(x.package_form||'—')}</div><div><span>فرط / علبة</span><strong>${Number(x.units_per_box||0).toLocaleString('en-US')}</strong></div></div>${can('manage_item_catalog')?`<div class="item-actions">${actions(x)}</div>`:''}</div>`).join('')}</div>`:'<div class="panel"><div class="empty">لا توجد أصناف مطابقة</div></div>';
   box.querySelectorAll('[data-item-edit]').forEach(b=>b.onclick=()=>itemModal(state.items.find(x=>x.id===b.dataset.itemEdit)));
-  box.querySelectorAll('[data-item-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف الصنف من دليل الأصناف؟'))return;try{await api(`/api/items/${b.dataset.itemDelete}`,{method:'DELETE'});state.items=state.items.filter(x=>x.id!==b.dataset.itemDelete);toast('تم حذف الصنف');renderItemRows();}catch(e){toast(e.message,true);}});
+  box.querySelectorAll('[data-item-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف الصنف من دليل الأصناف؟'))return;try{await api(`/api/items/${b.dataset.itemDelete}`,{method:'DELETE'});toast('تم حذف الصنف');await loadItemCatalog(false);}catch(e){toast(e.message,true);}});
 }
 
 function itemModal(item=null){

@@ -7,7 +7,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from openpyxl import load_workbook
 
-from ..core import ItemInput, current_profile, require_permission, sb
+from ..core import (
+    SUPABASE_URL, ItemInput, api_headers, current_profile, get_http_client,
+    require_permission, sb,
+)
 
 router = APIRouter(prefix="/api/items", tags=["items"])
 
@@ -48,10 +51,23 @@ async def _read_excel_bytes(file: UploadFile) -> bytes:
     return content
 
 
+def _content_range_total(value: str | None) -> int | None:
+    if not value or "/" not in value:
+        return None
+    tail = value.rsplit("/", 1)[-1].strip()
+    if tail == "*":
+        return None
+    try:
+        return int(tail)
+    except ValueError:
+        return None
+
+
 @router.get("")
 async def list_items(
     search: str = "",
-    limit: int = 1000,
+    limit: int = 100,
+    with_meta: bool = False,
     profile: dict[str, Any] = Depends(current_profile),
 ) -> Any:
     require_permission(profile, "view_item_analysis")
@@ -69,9 +85,30 @@ async def list_items(
         if safe_q:
             params["or"] = f"(item_code.ilike.*{safe_q}*,item_name.ilike.*{safe_q}*)"
 
-    result: list[dict[str, Any]] = []
+    # The first page also asks PostgREST for an exact count. This lets the
+    # frontend render only 100 rows by default without downloading the full
+    # catalog just to know how many items exist.
+    first_size = min(max_rows, 1000)
+    headers = api_headers(service=True)
+    headers.update({"Range": f"0-{first_size - 1}", "Prefer": "count=exact"})
+    response = await get_http_client().request(
+        "GET", f"{SUPABASE_URL}/rest/v1/item_catalog", headers=headers, params=params
+    )
+    if response.status_code >= 400:
+        detail: Any = response.text
+        try:
+            payload = response.json()
+            detail = payload.get("message") or payload.get("error_description") or payload.get("msg") or detail
+        except Exception:
+            pass
+        raise HTTPException(response.status_code, detail)
+
+    result: list[dict[str, Any]] = response.json() if response.content else []
+    total = _content_range_total(response.headers.get("content-range"))
+
+    # "Show all" is explicit, so only then do we page through the rest.
     page_size = 1000
-    for offset in range(0, max_rows, page_size):
+    for offset in range(first_size, max_rows, page_size):
         last = min(offset + page_size - 1, max_rows - 1)
         rows = await sb(
             "GET", "/rest/v1/item_catalog", service=True, params=params,
@@ -80,6 +117,9 @@ async def list_items(
         result.extend(rows or [])
         if len(rows or []) < (last - offset + 1):
             break
+
+    if with_meta:
+        return {"items": result, "total": total if total is not None else len(result)}
     return result
 
 
