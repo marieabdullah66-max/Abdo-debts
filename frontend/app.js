@@ -20,6 +20,7 @@ const state = {
   itemCatalogSearch: '',
   itemCatalogSearchTimer: null,
   itemCatalogRequestSeq: 0,
+  movementReports: [], movementRows: [], movementReport: null, movementReportId: '', movementBranchId: '', movementSearch: '', movementStatus: 'all',
   paymentPlanBranchId: '',
   paymentPlanStatus: 'open',
   paymentPlanSearch: '',
@@ -316,7 +317,7 @@ async function itemsView(main){
 async function renderItemsTab(){
   const box=document.getElementById('itemsTabBox');if(!box)return;
   if(state.itemsTab==='analysis'){
-    box.innerHTML=`<section class="panel movement-coming"><h3>تحليل حركة الأصناف</h3><p>هذا الجزء جاهز للربط بتقرير حركة الشهر بعد ما نشوف شكل التقرير الحقيقي.</p><div class="formula-card"><small>الحساب المتفق عليه</small><strong>العلب المكافئة = العلب المباعة + (الفرط المباع ÷ الفرط في العلبة)</strong><strong>معدل البيع اليومي = العلب المكافئة ÷ عدد أيام الشهر</strong></div><div class="hint">لن نربط تقرير الحركة أو نفترض أسماء أعمدته قبل مراجعة ملف فعلي.</div></section>`;
+    await renderMovementAnalysis(box);
     return;
   }
   state.itemCatalogShowAll=false;
@@ -360,6 +361,72 @@ function renderItemRows(){
   <div class="mobile-list">${rows.map(x=>`<div class="item-card"><div class="item-title"><span>${esc(x.item_name)}</span><strong>${esc(x.item_code)}</strong></div><div class="item-meta"><div><span>وحدة البيع</span>${esc(x.package_form||'—')}</div><div><span>فرط / علبة</span><strong>${Number(x.units_per_box||0).toLocaleString('en-US')}</strong></div></div>${can('manage_item_catalog')?`<div class="item-actions">${actions(x)}</div>`:''}</div>`).join('')}</div>`:'<div class="panel"><div class="empty">لا توجد أصناف مطابقة</div></div>';
   box.querySelectorAll('[data-item-edit]').forEach(b=>b.onclick=()=>itemModal(state.items.find(x=>x.id===b.dataset.itemEdit)));
   box.querySelectorAll('[data-item-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف الصنف من دليل الأصناف؟'))return;try{await api(`/api/items/${b.dataset.itemDelete}`,{method:'DELETE'});toast('تم حذف الصنف');await loadItemCatalog(false);}catch(e){toast(e.message,true);}});
+}
+
+
+function movementNumber(v,digits=2){const n=Number(v);if(!Number.isFinite(n))return '—';return n.toLocaleString('en-US',{minimumFractionDigits:digits,maximumFractionDigits:digits});}
+function movementPeriod(r){return `${esc(r.period_start||'')} ← ${esc(r.period_end||'')}`;}
+function movementMatchBadge(row){
+  if(!row.item_id)return `<span class="movement-match unmatched">يحتاج مطابقة</span>`;
+  const labels={exact:'مطابق تلقائيًا',alias:'مطابقة محفوظة',manual:'مطابق يدويًا'};
+  return `<span class="movement-match matched">${esc(labels[row.matched_by]||'مطابق')}</span>`;
+}
+async function renderMovementAnalysis(box){
+  box.innerHTML=`<div class="page-head movement-head"><div><h3>تحليل حركة الأصناف</h3><div class="muted">ارفع تقرير الحركة كما يخرج من منظومة البيع، والبرنامج يجمع المبيعات ويحوّل الفرط إلى علب.</div></div>${can('manage_item_catalog')?'<div class="page-head-actions"><button class="btn btn-primary" id="uploadMovementReport">+ رفع تقرير حركة</button></div>':''}</div>
+  <section class="movement-filter-panel"><div class="movement-filters"><div class="field"><label>الفرع</label><select class="select" id="movementBranchFilter"><option value="">كل الفروع</option>${branchOptions(false,false)}</select></div><div class="field"><label>التقرير</label><select class="select" id="movementReportSelect"><option value="">جاري تحميل التقارير...</option></select></div><div class="field"><label>الحالة</label><select class="select" id="movementStatusFilter"><option value="all">كل الأصناف</option><option value="unmatched">تحتاج مطابقة</option><option value="blocking">غير محسوبة بسبب الفرط</option></select></div></div><div class="toolbar movement-search-toolbar"><input class="input" id="movementSearch" value="${esc(state.movementSearch)}" placeholder="بحث باسم الصنف أو الكود..."></div></section>
+  <div id="movementAnalysisBox"><div class="loading">جاري تحميل تقارير الحركة...</div></div>`;
+  const branch=document.getElementById('movementBranchFilter'),status=document.getElementById('movementStatusFilter'),search=document.getElementById('movementSearch');
+  branch.value=state.movementBranchId||'';status.value=state.movementStatus||'all';
+  branch.onchange=async()=>{state.movementBranchId=branch.value;state.movementReportId='';await loadMovementReports();};
+  status.onchange=()=>{state.movementStatus=status.value;renderMovementRows();};
+  search.oninput=()=>{state.movementSearch=search.value;renderMovementRows();};
+  if(can('manage_item_catalog'))document.getElementById('uploadMovementReport').onclick=()=>movementUploadModal();
+  await loadMovementReports();
+}
+async function loadMovementReports(){
+  const box=document.getElementById('movementAnalysisBox');if(box)box.innerHTML='<div class="loading">جاري تحميل تقارير الحركة...</div>';
+  try{
+    const q=new URLSearchParams();if(state.movementBranchId)q.set('branch_id',state.movementBranchId);
+    state.movementReports=await api(`/api/item-movements/reports?${q.toString()}`)||[];
+    const select=document.getElementById('movementReportSelect');if(!select)return;
+    if(!state.movementReports.length){select.innerHTML='<option value="">لا توجد تقارير</option>';state.movementReportId='';state.movementReport=null;state.movementRows=[];if(box)box.innerHTML='<section class="panel"><div class="empty">لا يوجد تقرير حركة محفوظ. ارفع أول تقرير للفرع.</div></section>';return;}
+    if(!state.movementReportId||!state.movementReports.some(r=>r.id===state.movementReportId))state.movementReportId=state.movementReports[0].id;
+    select.innerHTML=state.movementReports.map(r=>`<option value="${r.id}">${esc((r.branches||{}).name||'فرع')} · ${esc(r.period_start)} → ${esc(r.period_end)}${Number(r.unresolved_count)>0?` · ${Number(r.unresolved_count)} تحتاج مطابقة`:''}</option>`).join('');
+    select.value=state.movementReportId;select.onchange=async()=>{state.movementReportId=select.value;await loadMovementReportDetail();};
+    await loadMovementReportDetail();
+  }catch(e){if(box)box.innerHTML=`<section class="panel"><div class="empty">${esc(e.message)}</div></section>`;toast(e.message,true);}
+}
+async function loadMovementReportDetail(){
+  const box=document.getElementById('movementAnalysisBox');if(!box||!state.movementReportId)return;
+  box.innerHTML='<div class="loading">جاري تحليل التقرير...</div>';
+  try{const data=await api(`/api/item-movements/reports/${state.movementReportId}`);state.movementReport=data.report||null;state.movementRows=data.rows||[];state.movementReport.total_equivalent_boxes=Number(data.total_equivalent_boxes||0);state.movementReport.blocking_count=Number(data.blocking_count||0);renderMovementRows();}catch(e){box.innerHTML=`<section class="panel"><div class="empty">${esc(e.message)}</div></section>`;toast(e.message,true);}
+}
+function renderMovementRows(){
+  const box=document.getElementById('movementAnalysisBox');if(!box||!state.movementReport)return;
+  const r=state.movementReport,q=(state.movementSearch||'').trim().toLowerCase(),status=state.movementStatus||'all';
+  let rows=state.movementRows.filter(x=>{const cat=x.item_catalog||{};const text=`${x.report_name||''} ${cat.item_name||''} ${cat.item_code||''}`.toLowerCase();if(q&&!text.includes(q))return false;if(status==='unmatched'&&x.item_id)return false;if(status==='blocking'&&(x.item_id||Number(x.loose_sold||0)<=0))return false;return true;});
+  const unresolved=Number(r.unresolved_count||0),blocking=Number(r.blocking_count||0),branch=(r.branches||{}).name||'';
+  box.innerHTML=`<div class="movement-summary cards"><div class="stat"><div class="label">الفترة</div><div class="value movement-period-value">${esc(r.period_start)} → ${esc(r.period_end)}</div><div class="sub">${Number(r.days_count||0)} يوم</div></div><div class="stat"><div class="label">عدد الأصناف</div><div class="value">${Number(r.unique_item_count||0).toLocaleString('en-US')}</div><div class="sub">${Number(r.transaction_count||0).toLocaleString('en-US')} حركة بيع</div></div><div class="stat"><div class="label">إجمالي العلب المكافئة</div><div class="value">${movementNumber(r.total_equivalent_boxes,2)}</div><div class="sub">للأصناف المحسوبة</div></div><div class="stat ${unresolved?'movement-warning-stat':''}"><div class="label">تحتاج مطابقة</div><div class="value">${unresolved.toLocaleString('en-US')}</div><div class="sub">${blocking?`${blocking} منها تمنع حساب الفرط`:'كل المعدلات محسوبة'}</div></div></div>
+  <section class="panel movement-report-info"><div><strong>${esc(branch)}</strong><span>${movementPeriod(r)}</span>${r.source_name?`<small>المصدر: ${esc(r.source_name)}</small>`:''}</div><div class="actions">${unresolved?`<button class="btn btn-soft btn-sm" id="showUnmatchedMovement">إظهار غير المطابق (${unresolved})</button>`:''}${can('manage_item_catalog')?`<button class="btn btn-danger btn-sm" id="deleteMovementReport">حذف التقرير</button>`:''}</div></section>
+  <div class="movement-results-head"><span>عرض ${rows.length.toLocaleString('en-US')} من ${state.movementRows.length.toLocaleString('en-US')} صنف</span><small>معدل البيع = إجمالي العلب المكافئة ÷ ${Number(r.days_count||0)} يوم</small></div>
+  ${rows.length?`<div class="table-wrap desktop-table"><table class="movement-table"><thead><tr><th>الصنف</th><th>علب</th><th>فرط</th><th>فرط/علبة</th><th>إجمالي بالعلب</th><th>معدل/يوم</th><th>المطابقة</th></tr></thead><tbody>${rows.map(x=>{const cat=x.item_catalog||{};return `<tr><td><strong>${esc(x.report_name)}</strong>${cat.item_name&&cat.item_name!==x.report_name?`<small>${esc(cat.item_name)}</small>`:''}${cat.item_code?`<small>كود: ${esc(cat.item_code)}</small>`:''}</td><td>${movementNumber(x.boxes_sold,2)}</td><td>${movementNumber(x.loose_sold,2)}</td><td>${x.units_per_box?Number(x.units_per_box).toLocaleString('en-US'):'—'}</td><td><strong>${movementNumber(x.equivalent_boxes,2)}</strong></td><td><strong class="movement-rate">${movementNumber(x.daily_rate,3)}</strong></td><td>${movementMatchBadge(x)}${!x.item_id&&can('manage_item_catalog')?`<button class="btn btn-ghost btn-sm movement-map-btn" data-map-movement="${x.id}">مطابقة</button>`:''}</td></tr>`}).join('')}</tbody></table></div>
+  <div class="mobile-list">${rows.map(x=>{const cat=x.item_catalog||{};return `<div class="item-card movement-card"><div class="item-title"><span>${esc(x.report_name)}</span><strong>${movementNumber(x.daily_rate,3)}/يوم</strong></div>${cat.item_name?`<div class="muted movement-catalog-name">${esc(cat.item_name)}${cat.item_code?` · ${esc(cat.item_code)}`:''}</div>`:''}<div class="item-meta"><div><span>علب مباعة</span><b>${movementNumber(x.boxes_sold,2)}</b></div><div><span>فرط مبيوع</span><b>${movementNumber(x.loose_sold,2)}</b></div><div><span>فرط/علبة</span><b>${x.units_per_box?Number(x.units_per_box).toLocaleString('en-US'):'—'}</b></div><div><span>إجمالي بالعلب</span><b>${movementNumber(x.equivalent_boxes,2)}</b></div></div><div class="item-actions">${movementMatchBadge(x)}${!x.item_id&&can('manage_item_catalog')?`<button class="btn btn-soft btn-sm" data-map-movement="${x.id}">مطابقة الصنف</button>`:''}</div></div>`}).join('')}</div>`:'<section class="panel"><div class="empty">لا توجد أصناف مطابقة للفلتر الحالي</div></section>'}`;
+  document.getElementById('showUnmatchedMovement')?.addEventListener('click',()=>{state.movementStatus='unmatched';const s=document.getElementById('movementStatusFilter');if(s)s.value='unmatched';renderMovementRows();});
+  document.getElementById('deleteMovementReport')?.addEventListener('click',async()=>{if(!confirmAction('حذف تقرير الحركة الحالي؟'))return;try{await api(`/api/item-movements/reports/${r.id}`,{method:'DELETE'});toast('تم حذف تقرير الحركة');state.movementReportId='';await loadMovementReports();}catch(e){toast(e.message,true);}});
+  box.querySelectorAll('[data-map-movement]').forEach(b=>b.onclick=()=>movementMapModal(state.movementRows.find(x=>x.id===b.dataset.mapMovement)));
+}
+function movementUploadModal(){
+  let preview=null;const wrap=showModal('رفع تقرير حركة الأصناف',`<form id="movementUploadForm" class="form-grid"><div class="field"><label>الفرع *</label><select class="select" name="branch_id" required><option value="">— اختر الفرع —</option>${branchOptions(false,false)}</select></div><div class="field"><label>تقرير الحركة *</label><input class="input" type="file" name="file" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required><div class="hint">ارفع الملف كما يخرج من منظومة البيع بدون تعديل.</div></div><div class="full"><button class="btn btn-soft" id="previewMovementFile" type="button">قراءة التقرير</button></div></form><div id="movementPreviewBox"><div class="hint">بعد قراءة الملف سيظهر تاريخ التقرير وعدد الأصناف قبل الحفظ.</div></div>`,async()=>{
+    const form=document.getElementById('movementUploadForm');if(!form.reportValidity())return false;if(!preview){toast('اضغط قراءة التقرير أولًا',true);return false;}const fd=new FormData(form);try{const data=await api('/api/item-movements/import',{method:'POST',body:fd});state.movementBranchId=String(fd.get('branch_id')||'');state.movementReportId=data.report_id;const branchFilter=document.getElementById('movementBranchFilter');if(branchFilter)branchFilter.value=state.movementBranchId;toast('تم حفظ تحليل حركة الأصناف');await loadMovementReports();return true;}catch(e){toast(e.message,true);return false;}
+  },{saveText:'حفظ التحليل',large:true});
+  const form=wrap.querySelector('#movementUploadForm'),previewBox=wrap.querySelector('#movementPreviewBox');if(state.movementBranchId)form.elements.branch_id.value=state.movementBranchId;const resetPreview=()=>{preview=null;previewBox.innerHTML='<div class="hint">اضغط قراءة التقرير للتأكد من الفترة وعدد الأصناف قبل الحفظ.</div>';};form.elements.branch_id.onchange=resetPreview;form.elements.file.onchange=resetPreview;
+  wrap.querySelector('#previewMovementFile').onclick=async()=>{if(!form.reportValidity())return;const btn=wrap.querySelector('#previewMovementFile');btn.disabled=true;previewBox.innerHTML='<div class="loading">جاري قراءة تقرير الحركة...</div>';try{const fd=new FormData(form);preview=await api('/api/item-movements/preview',{method:'POST',body:fd});previewBox.innerHTML=`<div class="movement-preview-grid"><div><span>الفترة</span><strong>${esc(preview.period_start)} → ${esc(preview.period_end)}</strong></div><div><span>عدد الأيام</span><strong>${Number(preview.days_count)}</strong></div><div><span>حركات البيع</span><strong>${Number(preview.transaction_count).toLocaleString('en-US')}</strong></div><div><span>الأصناف</span><strong>${Number(preview.unique_item_count).toLocaleString('en-US')}</strong></div><div><span>تحتاج مطابقة</span><strong>${Number(preview.unresolved_count).toLocaleString('en-US')}</strong></div><div><span>تمنع حساب الفرط</span><strong>${Number(preview.blocking_count).toLocaleString('en-US')}</strong></div></div>${preview.source_name?`<div class="hint">اسم المصدر داخل التقرير: ${esc(preview.source_name)}</div>`:''}<div class="movement-preview-note">الأصناف المطابقة تُحسب تلقائيًا. غير المطابقة تُحفظ في قائمة للمطابقة مرة واحدة، وبعدها يتذكرها البرنامج في التقارير القادمة.</div>`;}catch(e){preview=null;previewBox.innerHTML=`<div class="empty">${esc(e.message)}</div>`;toast(e.message,true);}finally{btn.disabled=false;}};
+}
+function movementMapModal(row){
+  if(!row)return;let selectedId='';let timer=null;const wrap=showModal('مطابقة صنف تقرير الحركة',`<div class="movement-map-source"><small>الاسم في تقرير البيع</small><strong>${esc(row.report_name)}</strong><span>${movementNumber(row.boxes_sold,2)} علبة + ${movementNumber(row.loose_sold,2)} فرط</span></div><div class="field"><label>ابحث في دليل الأصناف</label><input class="input" id="movementCatalogSearch" placeholder="اكتب جزءًا من الاسم أو الكود..."></div><div id="movementCatalogResults"><div class="hint">اكتب اسم الصنف الصحيح كما هو موجود في دليل الأصناف.</div></div>`,async()=>{if(!selectedId){toast('اختر الصنف الصحيح من دليل الأصناف',true);return false;}try{await api(`/api/item-movements/rows/${row.id}/map`,{method:'POST',body:JSON.stringify({item_id:selectedId})});toast('تم حفظ المطابقة وستُستخدم تلقائيًا في التقارير القادمة');await loadMovementReportDetail();return true;}catch(e){toast(e.message,true);return false;}},{saveText:'حفظ المطابقة',large:true});
+  const input=wrap.querySelector('#movementCatalogSearch'),results=wrap.querySelector('#movementCatalogResults');
+  const search=async()=>{const q=input.value.trim();selectedId='';if(!q){results.innerHTML='<div class="hint">اكتب جزءًا من الاسم أو الكود.</div>';return;}results.innerHTML='<div class="loading">جاري البحث...</div>';try{const params=new URLSearchParams({search:q,limit:'30',with_meta:'true'}),data=await api(`/api/items?${params}`),items=Array.isArray(data)?data:(data.items||[]);results.innerHTML=items.length?`<div class="movement-candidate-list">${items.map(x=>`<button type="button" class="movement-candidate" data-candidate="${x.id}"><span><strong>${esc(x.item_name)}</strong><small>${esc(x.item_code)}</small></span><b>${Number(x.units_per_box||0)} فرط/علبة</b></button>`).join('')}</div>`:'<div class="empty">لا توجد نتائج في دليل الأصناف</div>';results.querySelectorAll('[data-candidate]').forEach(btn=>btn.onclick=()=>{selectedId=btn.dataset.candidate;results.querySelectorAll('.movement-candidate').forEach(x=>x.classList.toggle('selected',x===btn));});}catch(e){results.innerHTML=`<div class="empty">${esc(e.message)}</div>`;}};
+  input.oninput=()=>{clearTimeout(timer);timer=setTimeout(search,280);};
 }
 
 function itemModal(item=null){

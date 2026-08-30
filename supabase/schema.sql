@@ -63,6 +63,55 @@ create table if not exists public.item_catalog (
 create index if not exists item_catalog_name_idx on public.item_catalog using btree (lower(item_name));
 create index if not exists item_catalog_code_idx on public.item_catalog(item_code);
 
+
+-- V18 — Monthly item movement analysis.
+create table if not exists public.item_name_aliases (
+  id uuid primary key default gen_random_uuid(),
+  report_name text not null,
+  report_name_norm text not null unique,
+  item_id uuid not null references public.item_catalog(id) on delete cascade,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists item_name_aliases_item_idx on public.item_name_aliases(item_id);
+
+create table if not exists public.item_movement_reports (
+  id uuid primary key default gen_random_uuid(),
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  source_name text,
+  source_filename text,
+  period_start date not null,
+  period_end date not null,
+  days_count integer not null check (days_count > 0),
+  transaction_count integer not null default 0 check (transaction_count >= 0),
+  unique_item_count integer not null default 0 check (unique_item_count >= 0),
+  unresolved_count integer not null default 0 check (unresolved_count >= 0),
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  unique(branch_id, period_start, period_end)
+);
+create index if not exists item_movement_reports_branch_period_idx on public.item_movement_reports(branch_id, period_end desc);
+
+create table if not exists public.item_movement_rows (
+  id uuid primary key default gen_random_uuid(),
+  report_id uuid not null references public.item_movement_reports(id) on delete cascade,
+  report_name text not null,
+  report_name_norm text not null,
+  item_id uuid references public.item_catalog(id) on delete set null,
+  boxes_sold numeric(16,6) not null default 0 check (boxes_sold >= 0),
+  loose_sold numeric(16,6) not null default 0 check (loose_sold >= 0),
+  units_per_box integer check (units_per_box > 0),
+  equivalent_boxes numeric(18,6),
+  daily_rate numeric(18,6),
+  matched_by text not null default 'unmatched' check (matched_by in ('exact','alias','manual','unmatched')),
+  created_at timestamptz not null default now(),
+  unique(report_id, report_name_norm)
+);
+create index if not exists item_movement_rows_report_idx on public.item_movement_rows(report_id);
+create index if not exists item_movement_rows_item_idx on public.item_movement_rows(item_id);
+create index if not exists item_movement_rows_unmatched_idx on public.item_movement_rows(report_id, matched_by);
+
 create table if not exists public.notifications (
   id uuid primary key default gen_random_uuid(),
   event_type text not null check (event_type in ('invoice_created','payment_created')),
@@ -300,6 +349,9 @@ alter table public.payments enable row level security;
 alter table public.payment_allocations enable row level security;
 alter table public.payment_plans enable row level security;
 alter table public.item_catalog enable row level security;
+alter table public.item_name_aliases enable row level security;
+alter table public.item_movement_reports enable row level security;
+alter table public.item_movement_rows enable row level security;
 alter table public.notifications enable row level security;
 alter table public.notification_reads enable row level security;
 
@@ -311,7 +363,7 @@ on conflict (id) do update set public=false, file_size_limit=10485760, allowed_m
 -- Do not expose financial data directly through the public Supabase API roles.
 revoke all on table public.branches, public.profiles, public.profile_branches, public.suppliers,
   public.supplier_categories, public.supplier_category_links, public.invoices, public.payments,
-  public.payment_allocations, public.payment_plans, public.item_catalog, public.notifications, public.notification_reads from anon, authenticated;
+  public.payment_allocations, public.payment_plans, public.item_catalog, public.item_name_aliases, public.item_movement_reports, public.item_movement_rows, public.notifications, public.notification_reads from anon, authenticated;
 revoke all on table public.invoice_balances from anon, authenticated;
 revoke execute on function public.create_payment_with_allocations(uuid,uuid,numeric,date,text,text,text,uuid,jsonb) from public, anon, authenticated;
 revoke execute on function public.update_payment_with_allocations(uuid,uuid,uuid,numeric,date,text,text,text,jsonb) from public, anon, authenticated;
