@@ -21,6 +21,7 @@ const state = {
   itemCatalogSearchTimer: null,
   itemCatalogRequestSeq: 0,
   movementReports: [], movementRows: [], movementReport: null, movementReportId: '', movementBranchId: '', movementSearch: '', movementStatus: 'all', movementSort: 'desc',
+  doctorSalesAnalysis: null, doctorSalesSearch: '', doctorSalesSort: 'net_desc', doctorSalesFileName: '',
   paymentPlanBranchId: '',
   paymentPlanStatus: 'open',
   paymentPlanSearch: '',
@@ -34,13 +35,14 @@ const PERMISSION_LABELS = {
   view_payments:'عرض السدادات', create_payments:'إضافة سداد', edit_payments:'تعديل السداد', delete_payments:'حذف السداد',
   manage_branches:'إدارة الفروع', manage_users:'إدارة المستخدمين', view_reports:'عرض التقارير',
   view_item_analysis:'عرض حركة الأصناف', manage_item_catalog:'إدارة دليل الأصناف',
+  view_doctor_sales:'عرض مبيعات الدكاترة',
   view_payment_plans:'عرض خطة السداد', manage_payment_plans:'إدارة خطة السداد'
 };
 const ROLE_LABELS = {admin:'مدير', finance:'مالي', viewer:'مشاهدة فقط'};
 const ROLE_DEFAULTS = {
   admin: Object.fromEntries(Object.keys(PERMISSION_LABELS).map(k=>[k,true])),
-  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true,view_payment_plans:true,manage_payment_plans:true},
-  viewer: {view_dashboard:true,view_suppliers:true,view_invoices:true,view_payments:true,view_reports:true,view_item_analysis:true,view_payment_plans:true}
+  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true,view_doctor_sales:true,view_payment_plans:true,manage_payment_plans:true},
+  viewer: {view_dashboard:true,view_suppliers:true,view_invoices:true,view_payments:true,view_reports:true,view_item_analysis:true,view_doctor_sales:true,view_payment_plans:true}
 };
 const STATUS_LABELS = {unpaid:'غير مسددة', partial:'جزئي', paid:'مسددة'};
 
@@ -218,13 +220,13 @@ function syncStickyOffsets(){
 }
 function renderApp(){
   if(!state.profile)return renderLogin();
-  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
+  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',doctorsales:'view_doctor_sales',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
   if(allowedViews[state.view] && !can(allowedViews[state.view])) state.view=can('view_dashboard')?'dashboard':can('view_invoices')?'invoices':'settings';
   const settingsVisible=can('manage_branches')||can('manage_suppliers')||can('manage_users');
   root.innerHTML=`<div class="app">
     <header class="topbar"><div class="topbar-inner"><div class="top-title"><div>💰</div><div><strong>Abdo Debts</strong><small>نظام المديونيات</small></div></div><div class="user-box">${notificationAccess()?`<button class="notification-bell" id="notificationBell" aria-label="الإشعارات" title="الإشعارات">🔔<span id="notificationBadge" class="notification-badge ${state.notificationUnread>0?'':'hidden'}">${state.notificationUnread>99?'99+':state.notificationUnread}</span></button>`:''}<span class="user-name">${esc(state.profile.full_name)}</span><button class="btn btn-ghost btn-sm" id="logoutBtn">خروج</button></div></div></header>
     <main class="main" id="main"></main>
-    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
+    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
   </div>`;
   document.getElementById('logoutBtn').onclick=logout;const bell=document.getElementById('notificationBell');if(bell)bell.onclick=openNotifications;updateNotificationBell();
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
@@ -237,6 +239,7 @@ function openSupplierPage(id){state.view='supplier';state.supplierId=id;const u=
 async function renderView(){const main=document.getElementById('main');main.innerHTML='<div class="loading">جاري التحميل...</div>';try{
   if(state.view==='dashboard')await dashboardView(main);
   else if(state.view==='items')await itemsView(main);
+  else if(state.view==='doctorsales')await doctorSalesView(main);
   else if(state.view==='suppliers')await suppliersView(main);
   else if(state.view==='supplier')await supplierDetailView(main);
   else if(state.view==='invoices')await invoicesView(main);
@@ -250,6 +253,65 @@ function supplierOptions(includeBlank=true){return `${includeBlank?'<option valu
 function statusBadge(s){return `<span class="badge ${s==='paid'?'badge-green':s==='partial'?'badge-amber':'badge-red'}">${STATUS_LABELS[s]||s}</span>`;}
 function paymentMethod(p){return p.method==='bank'?`🏦 ${esc(p.bank_name||'مصرف')}`:'💵 نقدي';}
 function categoryTags(categories=[]){return categories.length?`<div class="category-tags">${categories.map(c=>`<span class="category-tag">${esc(c.name)}</span>`).join('')}</div>`:'<span class="muted">بدون تصنيف</span>';}
+
+
+function doctorSalesSortRows(rows){
+  const list=[...rows],key=state.doctorSalesSort||'net_desc';
+  const getters={net_desc:x=>Number(x.net_sales||0),sales_desc:x=>Number(x.sales_total||0),invoices_desc:x=>Number(x.invoice_count||0),average_desc:x=>Number(x.average_invoice||0),items_desc:x=>Number(x.unique_items||0)};
+  const getter=getters[key]||getters.net_desc;
+  return list.sort((a,b)=>getter(b)-getter(a)||Number(b.sales_total||0)-Number(a.sales_total||0)||String(a.doctor||'').localeCompare(String(b.doctor||''),'ar'));
+}
+function doctorSalesFilteredRows(){
+  const data=state.doctorSalesAnalysis;if(!data)return [];
+  const q=String(state.doctorSalesSearch||'').trim().toLowerCase();
+  let rows=data.doctors||[];
+  if(q)rows=rows.filter(x=>String(x.doctor||'').toLowerCase().includes(q));
+  return doctorSalesSortRows(rows);
+}
+async function doctorSalesView(main){
+  main.innerHTML=`<div class="page-head doctor-sales-head"><div><h2>مبيعات الدكاترة</h2><div class="muted">ارفع تقرير المبيعات CSV كما يخرج من منظومة الصيدلية، والبرنامج يحسب أداء كل دكتور على مستوى الفواتير.</div></div><div class="page-head-actions"><button class="btn btn-primary" id="doctorSalesUpload">رفع تقرير مبيعات</button><input id="doctorSalesFile" type="file" accept=".csv,text/csv" hidden></div></div>
+  <section class="panel doctor-sales-upload-note"><strong>طريقة الحساب</strong><span>المبيعات بعد الخصم، المرتجعات منفصلة، الصافي = المبيعات − المرتجعات، ومتوسط الفاتورة = المبيعات ÷ عدد فواتير البيع.</span></section>
+  <div id="doctorSalesResults">${state.doctorSalesAnalysis?'<div class="loading">جاري عرض التحليل...</div>':'<section class="panel"><div class="empty">ارفع تقرير المبيعات لعرض أداء الدكاترة.</div></section>'}</div>`;
+  const fileInput=document.getElementById('doctorSalesFile'),uploadBtn=document.getElementById('doctorSalesUpload');
+  uploadBtn.onclick=()=>fileInput.click();
+  fileInput.onchange=async()=>{
+    const file=fileInput.files?.[0];if(!file)return;
+    uploadBtn.disabled=true;uploadBtn.textContent='جاري تحليل التقرير...';
+    try{
+      const body=new FormData();body.append('file',file);
+      const data=await api('/api/doctor-sales/analyze',{method:'POST',body});
+      state.doctorSalesAnalysis=data;state.doctorSalesFileName=file.name;state.doctorSalesSearch='';state.doctorSalesSort='net_desc';
+      toast('تم تحليل مبيعات الدكاترة');renderDoctorSalesResults();
+    }catch(e){toast(e.message,true);}finally{uploadBtn.disabled=false;uploadBtn.textContent='رفع تقرير مبيعات';fileInput.value='';}
+  };
+  if(state.doctorSalesAnalysis)renderDoctorSalesResults();
+}
+function renderDoctorSalesResults(){
+  const box=document.getElementById('doctorSalesResults'),data=state.doctorSalesAnalysis;if(!box||!data)return;
+  const t=data.totals||{};
+  box.innerHTML=`<section class="panel doctor-sales-report-info"><div><strong>${esc(data.source||'تقرير المبيعات')}</strong><span>${esc(data.period_start||'—')} ← ${esc(data.period_end||'—')}</span>${state.doctorSalesFileName?`<small>${esc(state.doctorSalesFileName)}</small>`:''}</div><span class="badge badge-green">${Number(data.doctor_count||0).toLocaleString('en-US')} دكتور/مستخدم</span></section>
+  <div class="doctor-sales-summary">
+    <div class="stat"><div class="label">صافي المبيعات</div><div class="value">${money(t.net_sales)}</div></div>
+    <div class="stat"><div class="label">إجمالي المبيعات</div><div class="value">${money(t.sales_total)}</div></div>
+    <div class="stat"><div class="label">المرتجعات</div><div class="value">${money(t.returns_total)}</div></div>
+    <div class="stat"><div class="label">عدد الفواتير</div><div class="value">${Number(t.invoice_count||0).toLocaleString('en-US')}</div></div>
+    <div class="stat"><div class="label">متوسط الفاتورة</div><div class="value">${money(t.average_invoice)}</div></div>
+    <div class="stat"><div class="label">الأصناف المختلفة</div><div class="value">${Number(t.unique_items||0).toLocaleString('en-US')}</div></div>
+  </div>
+  <section class="doctor-sales-filter-panel"><div class="toolbar doctor-sales-toolbar"><input class="input" id="doctorSalesSearch" value="${esc(state.doctorSalesSearch)}" placeholder="بحث باسم الدكتور..."><select class="select" id="doctorSalesSort"><option value="net_desc">الأعلى صافي مبيعات</option><option value="sales_desc">الأعلى مبيعات</option><option value="invoices_desc">الأكثر فواتير</option><option value="average_desc">الأعلى متوسط فاتورة</option><option value="items_desc">الأكثر أصنافًا</option></select></div></section>
+  <div id="doctorSalesTable"></div>`;
+  const search=document.getElementById('doctorSalesSearch'),sort=document.getElementById('doctorSalesSort');sort.value=state.doctorSalesSort||'net_desc';
+  search.oninput=()=>{state.doctorSalesSearch=search.value;renderDoctorSalesTable();};
+  sort.onchange=()=>{state.doctorSalesSort=sort.value;renderDoctorSalesTable();};
+  renderDoctorSalesTable();
+}
+function renderDoctorSalesTable(){
+  const box=document.getElementById('doctorSalesTable');if(!box)return;const rows=doctorSalesFilteredRows();
+  if(!rows.length){box.innerHTML='<section class="panel"><div class="empty">لا توجد نتائج مطابقة.</div></section>';return;}
+  const desktop=`<div class="table-wrap desktop-table"><table class="doctor-sales-table"><thead><tr><th>#</th><th>الدكتور</th><th>صافي المبيعات</th><th>المبيعات</th><th>المرتجعات</th><th>الفواتير</th><th>متوسط الفاتورة</th><th>الأصناف المختلفة</th><th>متوسط أصناف/فاتورة</th></tr></thead><tbody>${rows.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.doctor)}</strong><small>${Number(x.cash_invoice_count||0)} نقدي · ${Number(x.credit_invoice_count||0)} آجل</small></td><td class="money doctor-sales-net">${money(x.net_sales)}</td><td class="money">${money(x.sales_total)}</td><td class="money doctor-sales-return">${money(x.returns_total)}</td><td>${Number(x.invoice_count||0).toLocaleString('en-US')}</td><td class="money">${money(x.average_invoice)}</td><td>${Number(x.unique_items||0).toLocaleString('en-US')}</td><td>${Number(x.average_items_per_invoice||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td></tr>`).join('')}</tbody></table></div>`;
+  const mobile=`<div class="mobile-list">${rows.map((x,i)=>`<div class="item-card doctor-sales-card"><div class="item-title"><span>${i+1}. ${esc(x.doctor)}</span><strong class="money doctor-sales-net">${money(x.net_sales)}</strong></div><div class="item-meta"><div><span>المبيعات</span><strong>${money(x.sales_total)}</strong></div><div><span>المرتجعات</span><strong class="doctor-sales-return">${money(x.returns_total)}</strong></div><div><span>الفواتير</span><strong>${Number(x.invoice_count||0).toLocaleString('en-US')}</strong></div><div><span>متوسط الفاتورة</span><strong>${money(x.average_invoice)}</strong></div><div><span>الأصناف المختلفة</span><strong>${Number(x.unique_items||0).toLocaleString('en-US')}</strong></div><div><span>متوسط أصناف/فاتورة</span><strong>${Number(x.average_items_per_invoice||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div><div class="doctor-sales-card-foot"><span>${Number(x.cash_invoice_count||0)} فاتورة نقدية</span><span>${Number(x.credit_invoice_count||0)} فاتورة آجل</span></div></div>`).join('')}</div>`;
+  box.innerHTML=desktop+mobile;
+}
 
 async function dashboardView(main){
   main.innerHTML=`<div class="page-head"><div><h2>الرئيسية</h2><div class="muted">نظرة سريعة على المديونيات الحالية</div></div></div>

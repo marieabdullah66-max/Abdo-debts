@@ -36,6 +36,7 @@ PERMISSION_KEYS = {
     "view_payments", "create_payments", "edit_payments", "delete_payments",
     "manage_branches", "manage_users", "view_reports",
     "view_item_analysis", "manage_item_catalog",
+    "view_doctor_sales",
     "view_payment_plans", "manage_payment_plans",
 }
 
@@ -54,6 +55,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
         "view_reports": True,
         "view_item_analysis": True,
         "manage_item_catalog": True,
+        "view_doctor_sales": True,
         "view_payment_plans": True,
         "manage_payment_plans": True,
     },
@@ -64,6 +66,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
         "view_payments": True,
         "view_reports": True,
         "view_item_analysis": True,
+        "view_doctor_sales": True,
         "view_payment_plans": True,
     },
 }
