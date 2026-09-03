@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import io
-import re
 import unicodedata
 from collections import defaultdict
 from typing import Any
@@ -18,6 +17,8 @@ MAX_REPORT_ROWS = 100000
 
 SALE_PREFIX = "مبيعات"
 RETURN_WORD = "مردود"
+CASH_WORD = "نقد"
+CREDIT_WORD = "الآجل"
 
 
 def _text(value: Any) -> str:
@@ -96,57 +97,81 @@ def _period_and_source(rows: list[list[str]]) -> tuple[str, str, str]:
     return period_start, period_end, source
 
 
+def _date_only(value: str) -> str:
+    text = _text(value)
+    if not text:
+        return ""
+    return text.split()[0]
+
+
+def _item_identity(item_name: str, item_ref: str) -> str:
+    normalized_item = _normalize(item_name)
+    return f"ref:{item_ref}" if item_ref and item_ref != "0" else f"name:{normalized_item}"
+
+
 def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
     period_start, period_end, source = _period_and_source(rows)
 
     doctors: dict[str, dict[str, Any]] = {}
-    invoice_items: dict[tuple[str, str], set[str]] = defaultdict(set)
-    seen_invoices: set[tuple[str, str, str]] = set()
+    invoices: dict[tuple[str, str], dict[str, Any]] = {}
+    item_stats: dict[tuple[str, str], dict[str, Any]] = {}
     global_items: set[str] = set()
+    seen_returns: set[tuple[str, str]] = set()
+    excluded_credit_invoices: set[tuple[str, str]] = set()
 
     processed_rows = 0
     skipped_rows = 0
+    excluded_credit_rows = 0
 
     for row_index, row in enumerate(rows, start=1):
         movement_type = _label_value(row, ": نوع الحركة")
+        if not movement_type:
+            continue
+
         is_return = RETURN_WORD in movement_type
         is_sale = movement_type.startswith(SALE_PREFIX) and not is_return
-        if not is_sale and not is_return:
+        is_credit = CREDIT_WORD in movement_type
+        is_cash = CASH_WORD in movement_type
+
+        # V25: credit sales are completely excluded from doctor-sales analysis.
+        if is_sale and is_credit:
+            excluded_credit_rows += 1
+            doctor = _label_value(row, ": المستخدم")
+            movement_number = _label_value(row, ": رقم الحركة")
+            if doctor and movement_number:
+                excluded_credit_invoices.add((_normalize(doctor), movement_number))
+            continue
+
+        is_cash_sale = is_sale and is_cash and not is_credit
+        is_cash_return = is_return and is_cash and not is_credit
+        if not is_cash_sale and not is_cash_return:
             continue
 
         doctor = _label_value(row, ": المستخدم")
         movement_number = _label_value(row, ": رقم الحركة")
+        movement_date = _label_value(row, ": تاريخ الحركة")
+        activity_date = _date_only(movement_date)
         if not doctor or not movement_number:
             skipped_rows += 1
             continue
-
-        item = _item_values(row)
-        item_name = _text(item.get("اسم الصنف"))
-        item_ref = _text(item.get("ر.ت"))
-        quantity = abs(_number(item.get("الكمية")))
-        package = _text(item.get("التعبئة"))
-
-        invoice_total = abs(_number(_label_value(row, ": الإجمالي")))
-        discount = abs(_number(_label_value(row, ": الخصم")))
-        invoice_net = max(0.0, invoice_total - discount)
 
         doctor_key = _normalize(doctor)
         if not doctor_key:
             skipped_rows += 1
             continue
 
+        invoice_total = abs(_number(_label_value(row, ": الإجمالي")))
+        discount = abs(_number(_label_value(row, ": الخصم")))
+        invoice_net = max(0.0, invoice_total - discount)
+
         bucket = doctors.setdefault(doctor_key, {
             "doctor": doctor,
             "sales_total": 0.0,
             "returns_total": 0.0,
-            "net_sales": 0.0,
             "invoice_count": 0,
             "return_count": 0,
-            "cash_invoice_count": 0,
-            "credit_invoice_count": 0,
-            "cash_sales": 0.0,
-            "credit_sales": 0.0,
             "unique_items": set(),
+            "active_days": set(),
             "sales_lines": 0,
             "boxes_quantity": 0.0,
             "loose_quantity": 0.0,
@@ -154,39 +179,76 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
         if len(doctor) > len(bucket["doctor"]):
             bucket["doctor"] = doctor
 
-        category = "return" if is_return else "sale"
-        invoice_key = (doctor_key, category, movement_number)
-        if invoice_key not in seen_invoices:
-            seen_invoices.add(invoice_key)
-            if is_return:
+        if is_cash_return:
+            return_key = (doctor_key, movement_number)
+            if return_key not in seen_returns:
+                seen_returns.add(return_key)
                 bucket["returns_total"] += invoice_net
                 bucket["return_count"] += 1
-            else:
-                bucket["sales_total"] += invoice_net
-                bucket["invoice_count"] += 1
-                if "الآجل" in movement_type:
-                    bucket["credit_invoice_count"] += 1
-                    bucket["credit_sales"] += invoice_net
-                else:
-                    bucket["cash_invoice_count"] += 1
-                    bucket["cash_sales"] += invoice_net
+            processed_rows += 1
+            continue
 
-        if is_sale and item_name:
-            normalized_item = _normalize(item_name)
-            identity = f"ref:{item_ref}" if item_ref and item_ref != "0" else f"name:{normalized_item}"
+        invoice_key = (doctor_key, movement_number)
+        invoice = invoices.get(invoice_key)
+        if invoice is None:
+            invoice = {
+                "movement_number": movement_number,
+                "date": movement_date,
+                "activity_date": activity_date,
+                "net_total": invoice_net,
+                "item_ids": set(),
+                "row_order": row_index,
+            }
+            invoices[invoice_key] = invoice
+            bucket["sales_total"] += invoice_net
+            bucket["invoice_count"] += 1
+            if activity_date:
+                bucket["active_days"].add(activity_date)
+
+        item = _item_values(row)
+        item_name = _text(item.get("اسم الصنف"))
+        item_ref = _text(item.get("ر.ت"))
+        quantity = abs(_number(item.get("الكمية")))
+        package = _text(item.get("التعبئة"))
+        line_total = abs(_number(item.get("الإجمالي")))
+
+        if item_name:
+            identity = _item_identity(item_name, item_ref)
             bucket["unique_items"].add(identity)
             global_items.add(identity)
             bucket["sales_lines"] += 1
-            invoice_items[(doctor_key, movement_number)].add(identity)
+            invoice["item_ids"].add(identity)
+
             if package == "علبة":
                 bucket["boxes_quantity"] += quantity
             elif package == "فرط":
                 bucket["loose_quantity"] += quantity
 
+            stat_key = (doctor_key, identity)
+            stat = item_stats.setdefault(stat_key, {
+                "identity": identity,
+                "item_name": item_name,
+                "item_ref": item_ref,
+                "invoice_ids": set(),
+                "sales_lines": 0,
+                "boxes_quantity": 0.0,
+                "loose_quantity": 0.0,
+                "sales_value": 0.0,
+            })
+            if len(item_name) > len(stat["item_name"]):
+                stat["item_name"] = item_name
+            stat["invoice_ids"].add(movement_number)
+            stat["sales_lines"] += 1
+            stat["sales_value"] += line_total
+            if package == "علبة":
+                stat["boxes_quantity"] += quantity
+            elif package == "فرط":
+                stat["loose_quantity"] += quantity
+
         processed_rows += 1
 
     if not doctors:
-        raise HTTPException(422, "لم نجد مبيعات مرتبطة بمستخدمين داخل التقرير")
+        raise HTTPException(422, "لم نجد مبيعات نقدية مرتبطة بمستخدمين داخل التقرير")
 
     result_doctors: list[dict[str, Any]] = []
     for doctor_key, bucket in doctors.items():
@@ -194,28 +256,67 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
         sales_total = round(float(bucket["sales_total"]), 3)
         returns_total = round(float(bucket["returns_total"]), 3)
         net_sales = round(sales_total - returns_total, 3)
+        active_days_count = len(bucket["active_days"])
         average_invoice = round(sales_total / invoice_count, 3) if invoice_count else 0.0
-        total_invoice_items = sum(
-            len(items) for (key, _movement), items in invoice_items.items() if key == doctor_key
-        )
+        daily_average = round(net_sales / active_days_count, 3) if active_days_count else 0.0
+
+        doctor_invoices: list[dict[str, Any]] = []
+        total_invoice_items = 0
+        for (key, _movement), invoice in invoices.items():
+            if key != doctor_key:
+                continue
+            item_count = len(invoice["item_ids"])
+            total_invoice_items += item_count
+            doctor_invoices.append({
+                "movement_number": invoice["movement_number"],
+                "date": invoice["date"],
+                "net_total": round(float(invoice["net_total"]), 3),
+                "item_count": item_count,
+                "_row_order": invoice["row_order"],
+            })
+        doctor_invoices.sort(key=lambda item: item["_row_order"], reverse=True)
+        for invoice in doctor_invoices:
+            invoice.pop("_row_order", None)
+
         avg_items_per_invoice = round(total_invoice_items / invoice_count, 2) if invoice_count else 0.0
+
+        top_items: list[dict[str, Any]] = []
+        for (key, _identity), stat in item_stats.items():
+            if key != doctor_key:
+                continue
+            top_items.append({
+                "item_name": stat["item_name"],
+                "item_ref": stat["item_ref"],
+                "invoice_count": len(stat["invoice_ids"]),
+                "sales_lines": int(stat["sales_lines"]),
+                "boxes_quantity": round(float(stat["boxes_quantity"]), 2),
+                "loose_quantity": round(float(stat["loose_quantity"]), 2),
+                "sales_value": round(float(stat["sales_value"]), 3),
+            })
+        # Frequency across invoices is the safest ranking when the report mixes boxes and loose units.
+        top_items.sort(
+            key=lambda item: (item["invoice_count"], item["sales_lines"], item["sales_value"]),
+            reverse=True,
+        )
+
         result_doctors.append({
+            "doctor_key": doctor_key,
             "doctor": bucket["doctor"],
             "sales_total": sales_total,
             "returns_total": returns_total,
             "net_sales": net_sales,
             "invoice_count": invoice_count,
             "return_count": int(bucket["return_count"]),
+            "active_days": active_days_count,
             "average_invoice": average_invoice,
+            "daily_average": daily_average,
             "unique_items": len(bucket["unique_items"]),
             "average_items_per_invoice": avg_items_per_invoice,
             "sales_lines": int(bucket["sales_lines"]),
             "boxes_quantity": round(float(bucket["boxes_quantity"]), 2),
             "loose_quantity": round(float(bucket["loose_quantity"]), 2),
-            "cash_invoice_count": int(bucket["cash_invoice_count"]),
-            "credit_invoice_count": int(bucket["credit_invoice_count"]),
-            "cash_sales": round(float(bucket["cash_sales"]), 3),
-            "credit_sales": round(float(bucket["credit_sales"]), 3),
+            "top_items": top_items[:20],
+            "invoices": doctor_invoices,
         })
 
     result_doctors.sort(key=lambda item: (item["net_sales"], item["sales_total"]), reverse=True)
@@ -223,14 +324,22 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
     total_sales = round(sum(item["sales_total"] for item in result_doctors), 3)
     total_returns = round(sum(item["returns_total"] for item in result_doctors), 3)
     total_invoices = sum(item["invoice_count"] for item in result_doctors)
+    total_active_days = len({
+        date
+        for bucket in doctors.values()
+        for date in bucket["active_days"]
+    })
 
     return {
         "source": source,
         "period_start": period_start,
         "period_end": period_end,
+        "sales_scope": "cash_only",
         "doctor_count": len(result_doctors),
         "processed_rows": processed_rows,
         "skipped_rows": skipped_rows,
+        "excluded_credit_rows": excluded_credit_rows,
+        "excluded_credit_invoice_count": len(excluded_credit_invoices),
         "totals": {
             "sales_total": total_sales,
             "returns_total": total_returns,
@@ -238,6 +347,7 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
             "invoice_count": total_invoices,
             "average_invoice": round(total_sales / total_invoices, 3) if total_invoices else 0.0,
             "unique_items": len(global_items),
+            "active_days": total_active_days,
         },
         "doctors": result_doctors,
     }

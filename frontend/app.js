@@ -21,7 +21,7 @@ const state = {
   itemCatalogSearchTimer: null,
   itemCatalogRequestSeq: 0,
   movementReports: [], movementRows: [], movementReport: null, movementReportId: '', movementBranchId: '', movementSearch: '', movementStatus: 'all', movementSort: 'desc',
-  doctorSalesAnalysis: null, doctorSalesSearch: '', doctorSalesSort: 'net_desc', doctorSalesFileName: '',
+  doctorSalesAnalysis: null, doctorSalesSearch: '', doctorSalesSort: 'net_desc', doctorSalesFileName: '', doctorSalesSelectedDoctor: '',
   paymentPlanBranchId: '',
   paymentPlanStatus: 'open',
   paymentPlanSearch: '',
@@ -257,7 +257,7 @@ function categoryTags(categories=[]){return categories.length?`<div class="categ
 
 function doctorSalesSortRows(rows){
   const list=[...rows],key=state.doctorSalesSort||'net_desc';
-  const getters={net_desc:x=>Number(x.net_sales||0),sales_desc:x=>Number(x.sales_total||0),invoices_desc:x=>Number(x.invoice_count||0),average_desc:x=>Number(x.average_invoice||0),items_desc:x=>Number(x.unique_items||0)};
+  const getters={net_desc:x=>Number(x.net_sales||0),sales_desc:x=>Number(x.sales_total||0),invoices_desc:x=>Number(x.invoice_count||0),average_desc:x=>Number(x.average_invoice||0),daily_desc:x=>Number(x.daily_average||0),days_desc:x=>Number(x.active_days||0),items_desc:x=>Number(x.unique_items||0)};
   const getter=getters[key]||getters.net_desc;
   return list.sort((a,b)=>getter(b)-getter(a)||Number(b.sales_total||0)-Number(a.sales_total||0)||String(a.doctor||'').localeCompare(String(b.doctor||''),'ar'));
 }
@@ -268,9 +268,15 @@ function doctorSalesFilteredRows(){
   if(q)rows=rows.filter(x=>String(x.doctor||'').toLowerCase().includes(q));
   return doctorSalesSortRows(rows);
 }
+function doctorSalesSelected(){
+  const rows=state.doctorSalesAnalysis?.doctors||[];
+  return rows.find(x=>String(x.doctor_key||'')===String(state.doctorSalesSelectedDoctor||''))||null;
+}
 async function doctorSalesView(main){
-  main.innerHTML=`<div class="page-head doctor-sales-head"><div><h2>مبيعات الدكاترة</h2><div class="muted">ارفع تقرير المبيعات CSV كما يخرج من منظومة الصيدلية، والبرنامج يحسب أداء كل دكتور على مستوى الفواتير.</div></div><div class="page-head-actions"><button class="btn btn-primary" id="doctorSalesUpload">رفع تقرير مبيعات</button><input id="doctorSalesFile" type="file" accept=".csv,text/csv" hidden></div></div>
-  <section class="panel doctor-sales-upload-note"><strong>طريقة الحساب</strong><span>المبيعات بعد الخصم، المرتجعات منفصلة، الصافي = المبيعات − المرتجعات، ومتوسط الفاتورة = المبيعات ÷ عدد فواتير البيع.</span></section>
+  const selected=doctorSalesSelected();
+  if(selected){renderDoctorSalesDetail(main,selected);return;}
+  main.innerHTML=`<div class="page-head doctor-sales-head"><div><h2>مبيعات الدكاترة</h2><div class="muted">تحليل أداء الدكاترة من المبيعات النقدية فقط — مبيعات الآجل مستبعدة بالكامل.</div></div><div class="page-head-actions"><button class="btn btn-primary" id="doctorSalesUpload">رفع تقرير مبيعات</button><input id="doctorSalesFile" type="file" accept=".csv,text/csv" hidden></div></div>
+  <section class="panel doctor-sales-upload-note"><strong>طريقة الحساب</strong><span>نحسب المبيعات النقدية فقط، ونطرح المرتجعات النقدية من الصافي. أيام النشاط = الأيام التي تحتوي على فاتورة بيع نقدية، والمتوسط اليومي = صافي المبيعات ÷ أيام النشاط.</span></section>
   <div id="doctorSalesResults">${state.doctorSalesAnalysis?'<div class="loading">جاري عرض التحليل...</div>':'<section class="panel"><div class="empty">ارفع تقرير المبيعات لعرض أداء الدكاترة.</div></section>'}</div>`;
   const fileInput=document.getElementById('doctorSalesFile'),uploadBtn=document.getElementById('doctorSalesUpload');
   uploadBtn.onclick=()=>fileInput.click();
@@ -280,8 +286,8 @@ async function doctorSalesView(main){
     try{
       const body=new FormData();body.append('file',file);
       const data=await api('/api/doctor-sales/analyze',{method:'POST',body});
-      state.doctorSalesAnalysis=data;state.doctorSalesFileName=file.name;state.doctorSalesSearch='';state.doctorSalesSort='net_desc';
-      toast('تم تحليل مبيعات الدكاترة');renderDoctorSalesResults();
+      state.doctorSalesAnalysis=data;state.doctorSalesFileName=file.name;state.doctorSalesSearch='';state.doctorSalesSort='net_desc';state.doctorSalesSelectedDoctor='';
+      toast('تم تحليل المبيعات النقدية للدكاترة');renderDoctorSalesResults();
     }catch(e){toast(e.message,true);}finally{uploadBtn.disabled=false;uploadBtn.textContent='رفع تقرير مبيعات';fileInput.value='';}
   };
   if(state.doctorSalesAnalysis)renderDoctorSalesResults();
@@ -289,28 +295,63 @@ async function doctorSalesView(main){
 function renderDoctorSalesResults(){
   const box=document.getElementById('doctorSalesResults'),data=state.doctorSalesAnalysis;if(!box||!data)return;
   const t=data.totals||{};
-  box.innerHTML=`<section class="panel doctor-sales-report-info"><div><strong>${esc(data.source||'تقرير المبيعات')}</strong><span>${esc(data.period_start||'—')} ← ${esc(data.period_end||'—')}</span>${state.doctorSalesFileName?`<small>${esc(state.doctorSalesFileName)}</small>`:''}</div><span class="badge badge-green">${Number(data.doctor_count||0).toLocaleString('en-US')} دكتور/مستخدم</span></section>
+  box.innerHTML=`<section class="panel doctor-sales-report-info"><div><strong>${esc(data.source||'تقرير المبيعات')}</strong><span>${esc(data.period_start||'—')} ← ${esc(data.period_end||'—')}</span>${state.doctorSalesFileName?`<small>${esc(state.doctorSalesFileName)}</small>`:''}</div><div class="doctor-sales-report-badges"><span class="badge badge-green">${Number(data.doctor_count||0).toLocaleString('en-US')} دكتور/مستخدم</span><span class="badge">نقدي فقط</span></div></section>
   <div class="doctor-sales-summary">
-    <div class="stat"><div class="label">صافي المبيعات</div><div class="value">${money(t.net_sales)}</div></div>
-    <div class="stat"><div class="label">إجمالي المبيعات</div><div class="value">${money(t.sales_total)}</div></div>
-    <div class="stat"><div class="label">المرتجعات</div><div class="value">${money(t.returns_total)}</div></div>
-    <div class="stat"><div class="label">عدد الفواتير</div><div class="value">${Number(t.invoice_count||0).toLocaleString('en-US')}</div></div>
+    <div class="stat"><div class="label">صافي المبيعات النقدية</div><div class="value">${money(t.net_sales)}</div></div>
+    <div class="stat"><div class="label">إجمالي المبيعات النقدية</div><div class="value">${money(t.sales_total)}</div></div>
+    <div class="stat"><div class="label">المرتجعات النقدية</div><div class="value">${money(t.returns_total)}</div></div>
+    <div class="stat"><div class="label">عدد الفواتير النقدية</div><div class="value">${Number(t.invoice_count||0).toLocaleString('en-US')}</div></div>
     <div class="stat"><div class="label">متوسط الفاتورة</div><div class="value">${money(t.average_invoice)}</div></div>
-    <div class="stat"><div class="label">الأصناف المختلفة</div><div class="value">${Number(t.unique_items||0).toLocaleString('en-US')}</div></div>
+    <div class="stat"><div class="label">أيام النشاط</div><div class="value">${Number(t.active_days||0).toLocaleString('en-US')}</div></div>
   </div>
-  <section class="doctor-sales-filter-panel"><div class="toolbar doctor-sales-toolbar"><input class="input" id="doctorSalesSearch" value="${esc(state.doctorSalesSearch)}" placeholder="بحث باسم الدكتور..."><select class="select" id="doctorSalesSort"><option value="net_desc">الأعلى صافي مبيعات</option><option value="sales_desc">الأعلى مبيعات</option><option value="invoices_desc">الأكثر فواتير</option><option value="average_desc">الأعلى متوسط فاتورة</option><option value="items_desc">الأكثر أصنافًا</option></select></div></section>
+  <section class="doctor-sales-filter-panel"><div class="toolbar doctor-sales-toolbar"><input class="input" id="doctorSalesSearch" value="${esc(state.doctorSalesSearch)}" placeholder="بحث باسم الدكتور..."><select class="select" id="doctorSalesSort"><option value="net_desc">الأعلى صافي مبيعات</option><option value="sales_desc">الأعلى مبيعات</option><option value="invoices_desc">الأكثر فواتير</option><option value="average_desc">الأعلى متوسط فاتورة</option><option value="daily_desc">الأعلى متوسط يومي</option><option value="days_desc">الأكثر أيام نشاط</option><option value="items_desc">الأكثر أصنافًا مختلفة</option></select></div></section>
   <div id="doctorSalesTable"></div>`;
   const search=document.getElementById('doctorSalesSearch'),sort=document.getElementById('doctorSalesSort');sort.value=state.doctorSalesSort||'net_desc';
   search.oninput=()=>{state.doctorSalesSearch=search.value;renderDoctorSalesTable();};
   sort.onchange=()=>{state.doctorSalesSort=sort.value;renderDoctorSalesTable();};
   renderDoctorSalesTable();
 }
+function bindDoctorSalesDetailButtons(){
+  document.querySelectorAll('[data-doctor-sales-detail]').forEach(btn=>btn.onclick=()=>{
+    state.doctorSalesSelectedDoctor=btn.dataset.doctorSalesDetail||'';
+    doctorSalesView(document.getElementById('main'));
+  });
+}
 function renderDoctorSalesTable(){
   const box=document.getElementById('doctorSalesTable');if(!box)return;const rows=doctorSalesFilteredRows();
   if(!rows.length){box.innerHTML='<section class="panel"><div class="empty">لا توجد نتائج مطابقة.</div></section>';return;}
-  const desktop=`<div class="table-wrap desktop-table"><table class="doctor-sales-table"><thead><tr><th>#</th><th>الدكتور</th><th>صافي المبيعات</th><th>المبيعات</th><th>المرتجعات</th><th>الفواتير</th><th>متوسط الفاتورة</th><th>الأصناف المختلفة</th><th>متوسط أصناف/فاتورة</th></tr></thead><tbody>${rows.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.doctor)}</strong><small>${Number(x.cash_invoice_count||0)} نقدي · ${Number(x.credit_invoice_count||0)} آجل</small></td><td class="money doctor-sales-net">${money(x.net_sales)}</td><td class="money">${money(x.sales_total)}</td><td class="money doctor-sales-return">${money(x.returns_total)}</td><td>${Number(x.invoice_count||0).toLocaleString('en-US')}</td><td class="money">${money(x.average_invoice)}</td><td>${Number(x.unique_items||0).toLocaleString('en-US')}</td><td>${Number(x.average_items_per_invoice||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td></tr>`).join('')}</tbody></table></div>`;
-  const mobile=`<div class="mobile-list">${rows.map((x,i)=>`<div class="item-card doctor-sales-card"><div class="item-title"><span>${i+1}. ${esc(x.doctor)}</span><strong class="money doctor-sales-net">${money(x.net_sales)}</strong></div><div class="item-meta"><div><span>المبيعات</span><strong>${money(x.sales_total)}</strong></div><div><span>المرتجعات</span><strong class="doctor-sales-return">${money(x.returns_total)}</strong></div><div><span>الفواتير</span><strong>${Number(x.invoice_count||0).toLocaleString('en-US')}</strong></div><div><span>متوسط الفاتورة</span><strong>${money(x.average_invoice)}</strong></div><div><span>الأصناف المختلفة</span><strong>${Number(x.unique_items||0).toLocaleString('en-US')}</strong></div><div><span>متوسط أصناف/فاتورة</span><strong>${Number(x.average_items_per_invoice||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div><div class="doctor-sales-card-foot"><span>${Number(x.cash_invoice_count||0)} فاتورة نقدية</span><span>${Number(x.credit_invoice_count||0)} فاتورة آجل</span></div></div>`).join('')}</div>`;
-  box.innerHTML=desktop+mobile;
+  const desktop=`<div class="table-wrap desktop-table"><table class="doctor-sales-table"><thead><tr><th>#</th><th>الدكتور</th><th>صافي المبيعات</th><th>الفواتير</th><th>أيام النشاط</th><th>متوسط الفاتورة</th><th>المتوسط اليومي</th><th>الأصناف المختلفة</th><th>أصناف/فاتورة</th><th></th></tr></thead><tbody>${rows.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.doctor)}</strong></td><td class="money doctor-sales-net">${money(x.net_sales)}</td><td>${Number(x.invoice_count||0).toLocaleString('en-US')}</td><td>${Number(x.active_days||0).toLocaleString('en-US')}</td><td class="money">${money(x.average_invoice)}</td><td class="money">${money(x.daily_average)}</td><td>${Number(x.unique_items||0).toLocaleString('en-US')}</td><td>${Number(x.average_items_per_invoice||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td><button class="btn btn-soft btn-sm" data-doctor-sales-detail="${esc(x.doctor_key)}">التفاصيل</button></td></tr>`).join('')}</tbody></table></div>`;
+  const mobile=`<div class="mobile-list">${rows.map((x,i)=>`<div class="item-card doctor-sales-card"><div class="item-title"><span>${i+1}. ${esc(x.doctor)}</span><strong class="money doctor-sales-net">${money(x.net_sales)}</strong></div><div class="item-meta"><div><span>الفواتير</span><strong>${Number(x.invoice_count||0).toLocaleString('en-US')}</strong></div><div><span>أيام النشاط</span><strong>${Number(x.active_days||0).toLocaleString('en-US')}</strong></div><div><span>متوسط الفاتورة</span><strong>${money(x.average_invoice)}</strong></div><div><span>المتوسط اليومي</span><strong>${money(x.daily_average)}</strong></div><div><span>الأصناف المختلفة</span><strong>${Number(x.unique_items||0).toLocaleString('en-US')}</strong></div><div><span>أصناف/فاتورة</span><strong>${Number(x.average_items_per_invoice||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div><button class="btn btn-soft doctor-sales-detail-btn" data-doctor-sales-detail="${esc(x.doctor_key)}">عرض تفاصيل الدكتور</button></div>`).join('')}</div>`;
+  box.innerHTML=desktop+mobile;bindDoctorSalesDetailButtons();
+}
+function renderDoctorSalesDetail(main,doctor){
+  const topItems=doctor.top_items||[],invoices=doctor.invoices||[];
+  main.innerHTML=`<div class="page-head doctor-sales-detail-head"><div><button class="btn btn-soft btn-sm" id="doctorSalesBack">← رجوع لمبيعات الدكاترة</button><h2>${esc(doctor.doctor)}</h2><div class="muted">تفاصيل المبيعات النقدية خلال ${esc(state.doctorSalesAnalysis?.period_start||'—')} ← ${esc(state.doctorSalesAnalysis?.period_end||'—')}</div></div></div>
+  <div class="doctor-sales-summary doctor-detail-summary">
+    <div class="stat"><div class="label">صافي المبيعات</div><div class="value">${money(doctor.net_sales)}</div></div>
+    <div class="stat"><div class="label">عدد الفواتير</div><div class="value">${Number(doctor.invoice_count||0).toLocaleString('en-US')}</div></div>
+    <div class="stat"><div class="label">أيام النشاط</div><div class="value">${Number(doctor.active_days||0).toLocaleString('en-US')}</div></div>
+    <div class="stat"><div class="label">متوسط الفاتورة</div><div class="value">${money(doctor.average_invoice)}</div></div>
+    <div class="stat"><div class="label">المتوسط اليومي</div><div class="value">${money(doctor.daily_average)}</div></div>
+    <div class="stat"><div class="label">متوسط الأصناف/فاتورة</div><div class="value">${Number(doctor.average_items_per_invoice||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div></div>
+    <div class="stat"><div class="label">الأصناف المختلفة المباعة</div><div class="value">${Number(doctor.unique_items||0).toLocaleString('en-US')}</div></div>
+    <div class="stat"><div class="label">المرتجعات النقدية</div><div class="value">${money(doctor.returns_total)}</div></div>
+  </div>
+  <section class="panel doctor-top-items-panel"><div class="section-head"><div><h3>أكثر 20 صنف بيعًا</h3><div class="muted">الترتيب حسب عدد الفواتير التي ظهر فيها الصنف، مع عرض الكميات والقيمة.</div></div></div>${renderDoctorTopItems(topItems)}</section>
+  <section class="panel doctor-invoices-panel"><div class="section-head"><div><h3>الفواتير</h3><div class="muted">${Number(invoices.length).toLocaleString('en-US')} فاتورة بيع نقدية</div></div></div>${renderDoctorInvoices(invoices)}</section>`;
+  document.getElementById('doctorSalesBack').onclick=()=>{state.doctorSalesSelectedDoctor='';doctorSalesView(main);};
+}
+function renderDoctorTopItems(rows){
+  if(!rows.length)return '<div class="empty">لا توجد أصناف مباعة.</div>';
+  const desktop=`<div class="table-wrap desktop-table"><table class="doctor-top-items-table"><thead><tr><th>#</th><th>الصنف</th><th>عدد الفواتير</th><th>مرات الظهور</th><th>علب</th><th>فرط</th><th>قيمة البيع</th></tr></thead><tbody>${rows.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.item_name)}</strong>${x.item_ref?`<small>${esc(x.item_ref)}</small>`:''}</td><td>${Number(x.invoice_count||0).toLocaleString('en-US')}</td><td>${Number(x.sales_lines||0).toLocaleString('en-US')}</td><td>${Number(x.boxes_quantity||0).toLocaleString('en-US',{maximumFractionDigits:2})}</td><td>${Number(x.loose_quantity||0).toLocaleString('en-US',{maximumFractionDigits:2})}</td><td class="money">${money(x.sales_value)}</td></tr>`).join('')}</tbody></table></div>`;
+  const mobile=`<div class="mobile-list">${rows.map((x,i)=>`<div class="item-card doctor-top-item-card"><div class="item-title"><span>${i+1}. ${esc(x.item_name)}</span><strong>${Number(x.invoice_count||0)} فاتورة</strong></div><div class="item-meta"><div><span>علب</span><strong>${Number(x.boxes_quantity||0).toLocaleString('en-US',{maximumFractionDigits:2})}</strong></div><div><span>فرط</span><strong>${Number(x.loose_quantity||0).toLocaleString('en-US',{maximumFractionDigits:2})}</strong></div><div><span>مرات الظهور</span><strong>${Number(x.sales_lines||0).toLocaleString('en-US')}</strong></div><div><span>قيمة البيع</span><strong>${money(x.sales_value)}</strong></div></div></div>`).join('')}</div>`;
+  return desktop+mobile;
+}
+function renderDoctorInvoices(rows){
+  if(!rows.length)return '<div class="empty">لا توجد فواتير.</div>';
+  const desktop=`<div class="table-wrap desktop-table"><table class="doctor-invoices-table"><thead><tr><th>#</th><th>رقم الفاتورة/الحركة</th><th>التاريخ والوقت</th><th>عدد الأصناف</th><th>قيمة الفاتورة</th></tr></thead><tbody>${rows.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.movement_number)}</strong></td><td>${esc(x.date||'—')}</td><td>${Number(x.item_count||0).toLocaleString('en-US')}</td><td class="money">${money(x.net_total)}</td></tr>`).join('')}</tbody></table></div>`;
+  const mobile=`<div class="mobile-list doctor-invoice-mobile">${rows.map((x,i)=>`<div class="item-card"><div class="item-title"><span>#${esc(x.movement_number)}</span><strong>${money(x.net_total)}</strong></div><div class="item-meta"><div><span>التاريخ</span><strong>${esc(x.date||'—')}</strong></div><div><span>عدد الأصناف</span><strong>${Number(x.item_count||0).toLocaleString('en-US')}</strong></div></div></div>`).join('')}</div>`;
+  return desktop+mobile;
 }
 
 async function dashboardView(main){
