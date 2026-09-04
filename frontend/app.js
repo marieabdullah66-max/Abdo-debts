@@ -298,7 +298,7 @@ async function doctorSalesView(main){
 function renderDoctorSalesResults(){
   const box=document.getElementById('doctorSalesResults'),data=state.doctorSalesAnalysis;if(!box||!data)return;
   const t=data.totals||{};
-  box.innerHTML=`<section class="panel doctor-sales-report-info"><div><strong>${esc(data.source||'تقرير المبيعات')}</strong><span>${esc(data.period_start||'—')} ← ${esc(data.period_end||'—')}</span>${state.doctorSalesFileName?`<small>${esc(state.doctorSalesFileName)}</small>`:''}</div><div class="doctor-sales-report-badges"><span class="badge badge-green">${Number(data.doctor_count||0).toLocaleString('en-US')} دكتور/مستخدم</span><span class="badge">نقدي فقط</span></div></section>
+  box.innerHTML=`<section class="panel doctor-sales-report-info"><div><strong>${esc(data.source||'تقرير المبيعات')}</strong><span>${esc(data.period_start||'—')} ← ${esc(data.period_end||'—')}</span>${state.doctorSalesFileName?`<small>${esc(state.doctorSalesFileName)}</small>`:''}</div><div class="doctor-sales-report-badges"><span class="badge badge-green">${Number(data.doctor_count||0).toLocaleString('en-US')} دكتور/مستخدم</span><span class="badge">نقدي فقط</span><button class="btn btn-soft btn-sm" id="doctorSalesPdfExport">🧾 تصدير التحليل PDF</button></div></section>
   <div class="doctor-sales-summary">
     <div class="stat"><div class="label">صافي المبيعات النقدية</div><div class="value">${money(t.net_sales)}</div></div>
     <div class="stat"><div class="label">إجمالي المبيعات النقدية</div><div class="value">${money(t.sales_total)}</div></div>
@@ -309,9 +309,10 @@ function renderDoctorSalesResults(){
   </div>
   <section class="doctor-sales-filter-panel"><div class="toolbar doctor-sales-toolbar"><input class="input" id="doctorSalesSearch" value="${esc(state.doctorSalesSearch)}" placeholder="بحث باسم الدكتور..."><select class="select" id="doctorSalesSort"><option value="net_desc">الأعلى صافي مبيعات</option><option value="sales_desc">الأعلى مبيعات</option><option value="invoices_desc">الأكثر فواتير</option><option value="average_desc">الأعلى متوسط فاتورة</option><option value="daily_desc">الأعلى متوسط يومي</option><option value="days_desc">الأكثر أيام نشاط</option><option value="items_desc">الأكثر أصنافًا مختلفة</option></select></div></section>
   <div id="doctorSalesTable"></div>`;
-  const search=document.getElementById('doctorSalesSearch'),sort=document.getElementById('doctorSalesSort');sort.value=state.doctorSalesSort||'net_desc';
+  const search=document.getElementById('doctorSalesSearch'),sort=document.getElementById('doctorSalesSort'),pdfBtn=document.getElementById('doctorSalesPdfExport');sort.value=state.doctorSalesSort||'net_desc';
   search.oninput=()=>{state.doctorSalesSearch=search.value;renderDoctorSalesTable();};
   sort.onchange=()=>{state.doctorSalesSort=sort.value;renderDoctorSalesTable();};
+  if(pdfBtn)pdfBtn.onclick=()=>exportDoctorSalesAnalysisPdf();
   renderDoctorSalesTable();
 }
 function bindDoctorSalesDetailButtons(){
@@ -329,7 +330,7 @@ function renderDoctorSalesTable(){
 }
 function renderDoctorSalesDetail(main,doctor){
   const topItems=(doctor.top_items||[]).slice(0,50),invoices=(doctor.invoices||[]).filter(x=>Number(x.net_total||0)>100).sort((a,b)=>Number(b.net_total||0)-Number(a.net_total||0));
-  main.innerHTML=`<div class="page-head doctor-sales-detail-head"><div><button class="btn btn-soft btn-sm" id="doctorSalesBack">← رجوع لمبيعات الدكاترة</button><h2>${esc(doctor.doctor)}</h2><div class="muted">تفاصيل المبيعات النقدية خلال ${esc(state.doctorSalesAnalysis?.period_start||'—')} ← ${esc(state.doctorSalesAnalysis?.period_end||'—')}</div></div></div>
+  main.innerHTML=`<div class="page-head doctor-sales-detail-head"><div><button class="btn btn-soft btn-sm" id="doctorSalesBack">← رجوع لمبيعات الدكاترة</button><h2>${esc(doctor.doctor)}</h2><div class="muted">تفاصيل المبيعات النقدية خلال ${esc(state.doctorSalesAnalysis?.period_start||'—')} ← ${esc(state.doctorSalesAnalysis?.period_end||'—')}</div></div><div class="page-head-actions"><button class="btn btn-primary btn-sm" id="doctorDetailPdfExport">🧾 تصدير PDF</button></div></div>
   <div class="doctor-sales-summary doctor-detail-summary">
     <div class="stat"><div class="label">صافي المبيعات</div><div class="value">${money(doctor.net_sales)}</div></div>
     <div class="stat"><div class="label">عدد الفواتير</div><div class="value">${Number(doctor.invoice_count||0).toLocaleString('en-US')}</div></div>
@@ -348,6 +349,7 @@ function renderDoctorSalesDetail(main,doctor){
   <section class="panel doctor-top-items-panel"><div class="section-head"><div><h3>أكثر 50 صنف بيعًا</h3><div class="muted">يظهر أول 10 أصناف فقط، ويمكن عرض القائمة كاملة عند الحاجة.</div></div>${topItems.length>10?`<button class="btn btn-soft btn-sm" id="doctorTopItemsToggle">إظهار الكل (${Number(topItems.length).toLocaleString('en-US')})</button>`:''}</div><div id="doctorTopItemsBody">${renderDoctorTopItems(topItems.slice(0,10))}</div></section>
   <section class="panel doctor-invoices-panel"><div class="section-head"><div><h3>الفواتير فوق 100 د.ل</h3><div class="muted">${Number(invoices.length).toLocaleString('en-US')} فاتورة بيع نقدية قيمتها أكبر من 100 د.ل — مرتبة من الأعلى إلى الأقل</div></div></div>${renderDoctorInvoices(invoices)}</section>`;
   document.getElementById('doctorSalesBack').onclick=()=>{state.doctorSalesSelectedDoctor='';doctorSalesView(main);};
+  const detailPdfBtn=document.getElementById('doctorDetailPdfExport');if(detailPdfBtn)detailPdfBtn.onclick=()=>exportDoctorDetailPdf(doctor);
   const topToggle=document.getElementById('doctorTopItemsToggle'),topBody=document.getElementById('doctorTopItemsBody');
   if(topToggle&&topBody){let expanded=false;topToggle.onclick=()=>{expanded=!expanded;topBody.innerHTML=renderDoctorTopItems(expanded?topItems:topItems.slice(0,10));topToggle.textContent=expanded?'إخفاء وعرض أول 10':`إظهار الكل (${Number(topItems.length).toLocaleString('en-US')})`;};}
 }
@@ -362,6 +364,94 @@ function renderDoctorInvoices(rows){
   const desktop=`<div class="table-wrap desktop-table"><table class="doctor-invoices-table"><thead><tr><th>#</th><th>رقم الفاتورة/الحركة</th><th>التاريخ والوقت</th><th>عدد الأصناف</th><th>قيمة الفاتورة</th></tr></thead><tbody>${rows.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.movement_number)}</strong></td><td>${esc(x.date||'—')}</td><td>${Number(x.item_count||0).toLocaleString('en-US')}</td><td class="money">${money(x.net_total)}</td></tr>`).join('')}</tbody></table></div>`;
   const mobile=`<div class="mobile-list doctor-invoice-mobile">${rows.map((x,i)=>`<div class="item-card"><div class="item-title"><span>#${esc(x.movement_number)}</span><strong>${money(x.net_total)}</strong></div><div class="item-meta"><div><span>التاريخ</span><strong>${esc(x.date||'—')}</strong></div><div><span>عدد الأصناف</span><strong>${Number(x.item_count||0).toLocaleString('en-US')}</strong></div></div></div>`).join('')}</div>`;
   return desktop+mobile;
+}
+
+
+function doctorPdfGeneratedAt(){
+  return new Date().toLocaleString('en-GB',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+function doctorPdfNum(value,digits=0){
+  return Number(value||0).toLocaleString('en-US',{minimumFractionDigits:digits,maximumFractionDigits:digits});
+}
+function doctorPdfSafeTitle(value){
+  return String(value||'تقرير').replace(/[\\/:*?"<>|]+/g,'-').replace(/\s+/g,' ').trim().slice(0,100)||'تقرير';
+}
+function openDoctorPdfPrintWindow({title,subtitle='',body='',orientation='portrait'}){
+  const printWindow=window.open('','_blank');
+  if(!printWindow){toast('المتصفح منع نافذة التصدير. اسمح بالنوافذ المنبثقة وحاول من جديد.',true);return;}
+  const safeTitle=doctorPdfSafeTitle(title);
+  const html=`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(safeTitle)}</title><style>
+  @page{size:A4 ${orientation};margin:10mm 10mm 12mm}
+  *{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+  html,body{margin:0;padding:0;background:#fff;color:#15231f;font-family:Tahoma,Arial,"Segoe UI",sans-serif;direction:rtl}
+  body{font-size:10.5px;line-height:1.55}
+  .doc{width:100%;margin:0 auto}
+  .doc-head{border:1px solid #cfe0da;border-top:5px solid #0f7a5b;border-radius:12px;padding:12px 14px;margin-bottom:10px;background:#f8fcfa}
+  .doc-head h1{font-size:20px;line-height:1.25;margin:0 0 5px;color:#0f5f48}
+  .doc-head .sub{font-size:10px;color:#596b65;margin-top:2px}.doc-head .meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .tag{display:inline-block;border:1px solid #b9d8cd;background:#edf8f4;color:#17644e;border-radius:999px;padding:3px 8px;font-size:9px}
+  .section{margin:0 0 10px}.section.page-break{break-before:page;page-break-before:always}.section-title{font-size:13px;color:#0f5f48;margin:0 0 6px;padding-bottom:4px;border-bottom:2px solid #dbe9e4}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:9px}.card{border:1px solid #d8e4e0;border-radius:8px;padding:7px 8px;background:#fff;min-height:49px;break-inside:avoid}.card .label{font-size:8.5px;color:#667872;margin-bottom:3px}.card .value{font-size:13px;font-weight:700;color:#153e32}.card .note{font-size:8px;color:#788983;margin-top:2px}
+  .leaders{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.leader{border:1px solid #d9e5e1;border-radius:8px;padding:7px;background:#f9fbfa;break-inside:avoid}.leader .label{font-size:8px;color:#687a74}.leader .name{font-weight:700;margin:2px 0;color:#203b33}.leader .value{font-size:11px;color:#0f6b50;font-weight:700}
+  table{width:100%;border-collapse:collapse;table-layout:fixed;margin:0 0 8px;font-size:8.2px;direction:rtl}thead{display:table-header-group}tfoot{display:table-footer-group}tr{break-inside:avoid;page-break-inside:avoid}th,td{border:1px solid #d9e2df;padding:4px 4px;vertical-align:middle;overflow-wrap:anywhere}th{background:#e8f3ef;color:#1e4e40;font-weight:700;text-align:center}td{text-align:center}td.name{text-align:right;font-weight:700}td.money{white-space:nowrap;font-variant-numeric:tabular-nums}.muted{color:#70817b}.nowrap{white-space:nowrap}.small{font-size:7.5px}
+  .note-box{border:1px solid #dfebe7;background:#f8fbfa;border-radius:8px;padding:7px 9px;color:#5e716a;font-size:8.5px;margin:7px 0}.footer-note{margin-top:8px;padding-top:5px;border-top:1px solid #dce7e3;color:#7a8984;font-size:7.5px;text-align:center}
+  .doctor-items th:nth-child(1){width:5%}.doctor-items th:nth-child(2){width:43%}.doctor-items th:nth-child(3){width:10%}.doctor-items th:nth-child(4){width:10%}.doctor-items th:nth-child(5){width:8%}.doctor-items th:nth-child(6){width:8%}.doctor-items th:nth-child(7){width:16%}
+  .doctor-invoices th:nth-child(1){width:6%}.doctor-invoices th:nth-child(2){width:23%}.doctor-invoices th:nth-child(3){width:31%}.doctor-invoices th:nth-child(4){width:16%}.doctor-invoices th:nth-child(5){width:24%}
+  @media print{.doc-head,.card,.leader,.note-box{box-shadow:none}.section-title{break-after:avoid}.no-print{display:none!important}}
+  </style></head><body><main class="doc"><header class="doc-head"><h1>${esc(title)}</h1>${subtitle?`<div class="sub">${subtitle}</div>`:''}<div class="meta"><span class="tag">المبيعات النقدية فقط</span><span class="tag">مبيعات الآجل مستبعدة</span><span class="tag">تاريخ التصدير: ${esc(doctorPdfGeneratedAt())}</span></div></header>${body}<div class="footer-note">Abdo Debts - تقرير تحليلي للإدارة</div></main></body></html>`;
+  printWindow.document.open();printWindow.document.write(html);printWindow.document.close();
+  toast('تم تجهيز التقرير. اختر حفظ كـ PDF من نافذة الطباعة.');
+  setTimeout(()=>{try{printWindow.focus();printWindow.print();}catch{}},450);
+}
+function exportDoctorSalesAnalysisPdf(){
+  const data=state.doctorSalesAnalysis;if(!data){toast('ارفع تقرير المبيعات أولًا.',true);return;}
+  const doctors=[...(data.doctors||[])].sort((a,b)=>Number(b.net_sales||0)-Number(a.net_sales||0)||String(a.doctor||'').localeCompare(String(b.doctor||''),'ar'));
+  const t=data.totals||{},source=data.source||'تقرير المبيعات',period=`${data.period_start||'—'} ← ${data.period_end||'—'}`;
+  const bestNet=doctorCompareBest('net_sales'),bestDaily=doctorCompareBest('daily_average'),bestAvg=doctorCompareBest('average_invoice'),bestInvDay=doctorCompareBest('invoices_per_active_day'),bestStability=doctorCompareBest('stability_score');
+  const financialRows=doctors.map((d,i)=>`<tr><td>${i+1}</td><td class="name">${esc(d.doctor)}</td><td class="money">${money(d.net_sales)}</td><td>${doctorPdfNum(d.invoice_count)}</td><td>${doctorPdfNum(d.active_days)}</td><td class="money">${money(d.daily_average)}</td><td>${doctorPdfNum(d.invoices_per_active_day,2)}</td><td class="money">${money(d.average_invoice)}</td><td class="money">${money(d.median_invoice)}</td></tr>`).join('');
+  const qualityRows=doctors.map((d,i)=>`<tr><td>${i+1}</td><td class="name">${esc(d.doctor)}</td><td>${doctorPdfNum(d.average_items_per_invoice,2)}</td><td>${doctorPdfNum(d.unique_items)}</td><td>${doctorPdfNum(d.high_value_invoice_count)}</td><td>${doctorPdfNum(d.high_value_invoice_percentage,1)}%</td><td>${d.stability_score==null?'—':`${doctorPdfNum(d.stability_score,1)}%`}</td><td>${esc(d.stability_label||'—')}</td><td class="money">${money(d.returns_total)}</td></tr>`).join('');
+  const leader=(label,d,key,format='money')=>`<div class="leader"><div class="label">${esc(label)}</div><div class="name">${d?esc(d.doctor):'—'}</div><div class="value">${!d?'—':format==='money'?money(d[key]):format==='percent'?`${doctorPdfNum(d[key],1)}%`:doctorPdfNum(d[key],2)}</div></div>`;
+  const body=`
+  <section class="section"><div class="cards">
+    <div class="card"><div class="label">صافي المبيعات النقدية</div><div class="value">${money(t.net_sales)}</div></div>
+    <div class="card"><div class="label">إجمالي المبيعات النقدية</div><div class="value">${money(t.sales_total)}</div></div>
+    <div class="card"><div class="label">المرتجعات النقدية</div><div class="value">${money(t.returns_total)}</div></div>
+    <div class="card"><div class="label">عدد الفواتير النقدية</div><div class="value">${doctorPdfNum(t.invoice_count)}</div></div>
+    <div class="card"><div class="label">متوسط الفاتورة</div><div class="value">${money(t.average_invoice)}</div></div>
+    <div class="card"><div class="label">أيام النشاط</div><div class="value">${doctorPdfNum(t.active_days)}</div></div>
+    <div class="card"><div class="label">عدد الدكاترة</div><div class="value">${doctorPdfNum(data.doctor_count)}</div></div>
+    <div class="card"><div class="label">الأصناف المختلفة</div><div class="value">${doctorPdfNum(t.unique_items)}</div></div>
+  </div></section>
+  <section class="section"><h2 class="section-title">أبرز مؤشرات الأداء</h2><div class="leaders">${leader('الأعلى صافي مبيعات',bestNet,'net_sales')}${leader('الأعلى مبيعات / يوم',bestDaily,'daily_average')}${leader('الأعلى متوسط فاتورة',bestAvg,'average_invoice')}${leader('الأعلى فواتير / يوم',bestInvDay,'invoices_per_active_day','num')}${leader('الأكثر ثباتًا',bestStability,'stability_score','percent')}</div></section>
+  <section class="section page-break"><h2 class="section-title">المقارنة المالية والتشغيلية لجميع الدكاترة</h2><table><thead><tr><th style="width:4%">#</th><th style="width:18%">الدكتور</th><th>صافي المبيعات</th><th>الفواتير</th><th>أيام النشاط</th><th>مبيعات/يوم</th><th>فواتير/يوم</th><th>متوسط الفاتورة</th><th>Median</th></tr></thead><tbody>${financialRows}</tbody></table></section>
+  <section class="section page-break"><h2 class="section-title">مؤشرات تنوع وجودة الأداء</h2><table><thead><tr><th style="width:4%">#</th><th style="width:18%">الدكتور</th><th>أصناف/فاتورة</th><th>الأصناف المختلفة</th><th>فواتير >100</th><th>نسبة >100</th><th>الثبات</th><th>تقييم الثبات</th><th>المرتجعات</th></tr></thead><tbody>${qualityRows}</tbody></table><div class="note-box">ثبات الأداء يقيس انتظام قيمة المبيعات النقدية بين أيام النشاط. كلما ارتفعت النسبة كان الأداء اليومي أكثر استقرارًا. عدد الفواتير وباقي المؤشرات محسوبة على كل المبيعات النقدية، بينما مبيعات الآجل مستبعدة بالكامل.</div></section>`;
+  openDoctorPdfPrintWindow({title:'تحليل مبيعات الدكاترة',subtitle:`${esc(source)} | الفترة: ${esc(period)}${state.doctorSalesFileName?` | الملف: ${esc(state.doctorSalesFileName)}`:''}`,body,orientation:'landscape'});
+}
+function exportDoctorDetailPdf(doctor){
+  if(!doctor)return;
+  const data=state.doctorSalesAnalysis||{},topItems=(doctor.top_items||[]).slice(0,50),invoices=(doctor.invoices||[]).filter(x=>Number(x.net_total||0)>100).sort((a,b)=>Number(b.net_total||0)-Number(a.net_total||0));
+  const topRows=topItems.map((x,i)=>`<tr><td>${i+1}</td><td class="name">${esc(x.item_name)}${x.item_ref?`<div class="muted small">${esc(x.item_ref)}</div>`:''}</td><td>${doctorPdfNum(x.invoice_count)}</td><td>${doctorPdfNum(x.sales_lines)}</td><td>${doctorPdfNum(x.boxes_quantity,2)}</td><td>${doctorPdfNum(x.loose_quantity,2)}</td><td class="money">${money(x.sales_value)}</td></tr>`).join('');
+  const invoiceRows=invoices.map((x,i)=>`<tr><td>${i+1}</td><td>${esc(x.movement_number)}</td><td>${esc(x.date||'—')}</td><td>${doctorPdfNum(x.item_count)}</td><td class="money">${money(x.net_total)}</td></tr>`).join('');
+  const stability=doctor.stability_score==null?'—':`${doctorPdfNum(doctor.stability_score,1)}%`;
+  const body=`
+  <section class="section"><div class="cards">
+    <div class="card"><div class="label">صافي المبيعات</div><div class="value">${money(doctor.net_sales)}</div></div>
+    <div class="card"><div class="label">عدد الفواتير</div><div class="value">${doctorPdfNum(doctor.invoice_count)}</div></div>
+    <div class="card"><div class="label">أيام النشاط</div><div class="value">${doctorPdfNum(doctor.active_days)}</div></div>
+    <div class="card"><div class="label">المبيعات / يوم نشاط</div><div class="value">${money(doctor.daily_average)}</div></div>
+    <div class="card"><div class="label">فواتير / يوم نشاط</div><div class="value">${doctorPdfNum(doctor.invoices_per_active_day,2)}</div></div>
+    <div class="card"><div class="label">متوسط الفاتورة</div><div class="value">${money(doctor.average_invoice)}</div></div>
+    <div class="card"><div class="label">Median الفاتورة</div><div class="value">${money(doctor.median_invoice)}</div></div>
+    <div class="card"><div class="label">متوسط الأصناف / فاتورة</div><div class="value">${doctorPdfNum(doctor.average_items_per_invoice,2)}</div></div>
+    <div class="card"><div class="label">الأصناف المختلفة</div><div class="value">${doctorPdfNum(doctor.unique_items)}</div></div>
+    <div class="card"><div class="label">الفواتير فوق 100</div><div class="value">${doctorPdfNum(doctor.high_value_invoice_count)}</div><div class="note">${doctorPdfNum(doctor.high_value_invoice_percentage,1)}% من الفواتير</div></div>
+    <div class="card"><div class="label">ثبات الأداء</div><div class="value">${stability}</div><div class="note">${esc(doctor.stability_label||'—')}</div></div>
+    <div class="card"><div class="label">المرتجعات النقدية</div><div class="value">${money(doctor.returns_total)}</div></div>
+  </div><div class="note-box">ثبات الأداء يقيس انتظام قيمة المبيعات النقدية بين أيام النشاط؛ كلما ارتفعت النسبة كان الأداء أكثر استقرارًا. التحليل يستبعد مبيعات الآجل بالكامل.</div></section>
+  <section class="section page-break"><h2 class="section-title">أكثر 50 صنف بيعًا</h2>${topItems.length?`<table class="doctor-items"><thead><tr><th>#</th><th>الصنف</th><th>عدد الفواتير</th><th>مرات الظهور</th><th>علب</th><th>فرط</th><th>قيمة البيع</th></tr></thead><tbody>${topRows}</tbody></table>`:'<div class="note-box">لا توجد أصناف مباعة.</div>'}</section>
+  <section class="section"><h2 class="section-title">الفواتير النقدية فوق 100 د.ل</h2><div class="note-box">${doctorPdfNum(invoices.length)} فاتورة - مرتبة من الأعلى إلى الأقل.</div>${invoices.length?`<table class="doctor-invoices"><thead><tr><th>#</th><th>رقم الفاتورة/الحركة</th><th>التاريخ والوقت</th><th>عدد الأصناف</th><th>قيمة الفاتورة</th></tr></thead><tbody>${invoiceRows}</tbody></table>`:'<div class="note-box">لا توجد فواتير نقدية قيمتها أكبر من 100 د.ل.</div>'}</section>`;
+  const period=`${data.period_start||'—'} ← ${data.period_end||'—'}`;
+  openDoctorPdfPrintWindow({title:`تفاصيل مبيعات - ${doctor.doctor}`,subtitle:`الفترة: ${esc(period)} | ${esc(data.source||'تقرير المبيعات')}`,body,orientation:'portrait'});
 }
 
 
