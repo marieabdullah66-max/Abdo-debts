@@ -337,9 +337,11 @@ function renderDoctorSalesDetail(main,doctor){
     <div class="stat"><div class="label">الأصناف المختلفة المباعة</div><div class="value">${Number(doctor.unique_items||0).toLocaleString('en-US')}</div></div>
     <div class="stat"><div class="label">المرتجعات النقدية</div><div class="value">${money(doctor.returns_total)}</div></div>
   </div>
-  <section class="panel doctor-top-items-panel"><div class="section-head"><div><h3>أكثر 50 صنف بيعًا</h3><div class="muted">الترتيب حسب عدد الفواتير التي ظهر فيها الصنف، مع عرض الكميات والقيمة.</div></div></div>${renderDoctorTopItems(topItems)}</section>
+  <section class="panel doctor-top-items-panel"><div class="section-head"><div><h3>أكثر 50 صنف بيعًا</h3><div class="muted">يظهر أول 10 أصناف فقط، ويمكن عرض القائمة كاملة عند الحاجة.</div></div>${topItems.length>10?`<button class="btn btn-soft btn-sm" id="doctorTopItemsToggle">إظهار الكل (${Number(topItems.length).toLocaleString('en-US')})</button>`:''}</div><div id="doctorTopItemsBody">${renderDoctorTopItems(topItems.slice(0,10))}</div></section>
   <section class="panel doctor-invoices-panel"><div class="section-head"><div><h3>الفواتير فوق 100 د.ل</h3><div class="muted">${Number(invoices.length).toLocaleString('en-US')} فاتورة بيع نقدية قيمتها أكبر من 100 د.ل — مرتبة من الأعلى إلى الأقل</div></div></div>${renderDoctorInvoices(invoices)}</section>`;
   document.getElementById('doctorSalesBack').onclick=()=>{state.doctorSalesSelectedDoctor='';doctorSalesView(main);};
+  const topToggle=document.getElementById('doctorTopItemsToggle'),topBody=document.getElementById('doctorTopItemsBody');
+  if(topToggle&&topBody){let expanded=false;topToggle.onclick=()=>{expanded=!expanded;topBody.innerHTML=renderDoctorTopItems(expanded?topItems:topItems.slice(0,10));topToggle.textContent=expanded?'إخفاء وعرض أول 10':`إظهار الكل (${Number(topItems.length).toLocaleString('en-US')})`;};}
 }
 function renderDoctorTopItems(rows){
   if(!rows.length)return '<div class="empty">لا توجد أصناف مباعة.</div>';
