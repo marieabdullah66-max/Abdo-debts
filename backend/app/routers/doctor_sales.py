@@ -274,7 +274,12 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
                 "item_count": item_count,
                 "_row_order": invoice["row_order"],
             })
-        doctor_invoices.sort(key=lambda item: item["_row_order"], reverse=True)
+        # V26: details page shows only cash invoices above 100 LYD, highest value first.
+        doctor_invoices = [invoice for invoice in doctor_invoices if invoice["net_total"] > 100]
+        doctor_invoices.sort(
+            key=lambda item: (item["net_total"], item["_row_order"]),
+            reverse=True,
+        )
         for invoice in doctor_invoices:
             invoice.pop("_row_order", None)
 
@@ -315,7 +320,7 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
             "sales_lines": int(bucket["sales_lines"]),
             "boxes_quantity": round(float(bucket["boxes_quantity"]), 2),
             "loose_quantity": round(float(bucket["loose_quantity"]), 2),
-            "top_items": top_items[:20],
+            "top_items": top_items[:50],
             "invoices": doctor_invoices,
         })
 

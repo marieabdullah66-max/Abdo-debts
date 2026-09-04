@@ -325,7 +325,7 @@ function renderDoctorSalesTable(){
   box.innerHTML=desktop+mobile;bindDoctorSalesDetailButtons();
 }
 function renderDoctorSalesDetail(main,doctor){
-  const topItems=doctor.top_items||[],invoices=doctor.invoices||[];
+  const topItems=(doctor.top_items||[]).slice(0,50),invoices=(doctor.invoices||[]).filter(x=>Number(x.net_total||0)>100).sort((a,b)=>Number(b.net_total||0)-Number(a.net_total||0));
   main.innerHTML=`<div class="page-head doctor-sales-detail-head"><div><button class="btn btn-soft btn-sm" id="doctorSalesBack">← رجوع لمبيعات الدكاترة</button><h2>${esc(doctor.doctor)}</h2><div class="muted">تفاصيل المبيعات النقدية خلال ${esc(state.doctorSalesAnalysis?.period_start||'—')} ← ${esc(state.doctorSalesAnalysis?.period_end||'—')}</div></div></div>
   <div class="doctor-sales-summary doctor-detail-summary">
     <div class="stat"><div class="label">صافي المبيعات</div><div class="value">${money(doctor.net_sales)}</div></div>
@@ -337,8 +337,8 @@ function renderDoctorSalesDetail(main,doctor){
     <div class="stat"><div class="label">الأصناف المختلفة المباعة</div><div class="value">${Number(doctor.unique_items||0).toLocaleString('en-US')}</div></div>
     <div class="stat"><div class="label">المرتجعات النقدية</div><div class="value">${money(doctor.returns_total)}</div></div>
   </div>
-  <section class="panel doctor-top-items-panel"><div class="section-head"><div><h3>أكثر 20 صنف بيعًا</h3><div class="muted">الترتيب حسب عدد الفواتير التي ظهر فيها الصنف، مع عرض الكميات والقيمة.</div></div></div>${renderDoctorTopItems(topItems)}</section>
-  <section class="panel doctor-invoices-panel"><div class="section-head"><div><h3>الفواتير</h3><div class="muted">${Number(invoices.length).toLocaleString('en-US')} فاتورة بيع نقدية</div></div></div>${renderDoctorInvoices(invoices)}</section>`;
+  <section class="panel doctor-top-items-panel"><div class="section-head"><div><h3>أكثر 50 صنف بيعًا</h3><div class="muted">الترتيب حسب عدد الفواتير التي ظهر فيها الصنف، مع عرض الكميات والقيمة.</div></div></div>${renderDoctorTopItems(topItems)}</section>
+  <section class="panel doctor-invoices-panel"><div class="section-head"><div><h3>الفواتير فوق 100 د.ل</h3><div class="muted">${Number(invoices.length).toLocaleString('en-US')} فاتورة بيع نقدية قيمتها أكبر من 100 د.ل — مرتبة من الأعلى إلى الأقل</div></div></div>${renderDoctorInvoices(invoices)}</section>`;
   document.getElementById('doctorSalesBack').onclick=()=>{state.doctorSalesSelectedDoctor='';doctorSalesView(main);};
 }
 function renderDoctorTopItems(rows){
@@ -348,7 +348,7 @@ function renderDoctorTopItems(rows){
   return desktop+mobile;
 }
 function renderDoctorInvoices(rows){
-  if(!rows.length)return '<div class="empty">لا توجد فواتير.</div>';
+  if(!rows.length)return '<div class="empty">لا توجد فواتير نقدية قيمتها أكبر من 100 د.ل.</div>';
   const desktop=`<div class="table-wrap desktop-table"><table class="doctor-invoices-table"><thead><tr><th>#</th><th>رقم الفاتورة/الحركة</th><th>التاريخ والوقت</th><th>عدد الأصناف</th><th>قيمة الفاتورة</th></tr></thead><tbody>${rows.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.movement_number)}</strong></td><td>${esc(x.date||'—')}</td><td>${Number(x.item_count||0).toLocaleString('en-US')}</td><td class="money">${money(x.net_total)}</td></tr>`).join('')}</tbody></table></div>`;
   const mobile=`<div class="mobile-list doctor-invoice-mobile">${rows.map((x,i)=>`<div class="item-card"><div class="item-title"><span>#${esc(x.movement_number)}</span><strong>${money(x.net_total)}</strong></div><div class="item-meta"><div><span>التاريخ</span><strong>${esc(x.date||'—')}</strong></div><div><span>عدد الأصناف</span><strong>${Number(x.item_count||0).toLocaleString('en-US')}</strong></div></div></div>`).join('')}</div>`;
   return desktop+mobile;
