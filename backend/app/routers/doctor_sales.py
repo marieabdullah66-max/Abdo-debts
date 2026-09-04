@@ -4,6 +4,7 @@ import csv
 import io
 import unicodedata
 from collections import defaultdict
+from statistics import median, pstdev
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -175,6 +176,7 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
             "sales_lines": 0,
             "boxes_quantity": 0.0,
             "loose_quantity": 0.0,
+            "daily_sales": defaultdict(float),
         })
         if len(doctor) > len(bucket["doctor"]):
             bucket["doctor"] = doctor
@@ -204,6 +206,7 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
             bucket["invoice_count"] += 1
             if activity_date:
                 bucket["active_days"].add(activity_date)
+                bucket["daily_sales"][activity_date] += invoice_net
 
         item = _item_values(row)
         item_name = _text(item.get("اسم الصنف"))
@@ -259,6 +262,7 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
         active_days_count = len(bucket["active_days"])
         average_invoice = round(sales_total / invoice_count, 3) if invoice_count else 0.0
         daily_average = round(net_sales / active_days_count, 3) if active_days_count else 0.0
+        invoices_per_active_day = round(invoice_count / active_days_count, 2) if active_days_count else 0.0
 
         doctor_invoices: list[dict[str, Any]] = []
         total_invoice_items = 0
@@ -274,6 +278,33 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
                 "item_count": item_count,
                 "_row_order": invoice["row_order"],
             })
+        invoice_values = [float(invoice["net_total"]) for invoice in doctor_invoices]
+        median_invoice = round(float(median(invoice_values)), 3) if invoice_values else 0.0
+        high_value_invoice_count = sum(1 for value in invoice_values if value > 100)
+        high_value_invoice_percentage = round(
+            (high_value_invoice_count / invoice_count) * 100, 2
+        ) if invoice_count else 0.0
+
+        daily_sales_values = [
+            float(bucket["daily_sales"].get(day, 0.0))
+            for day in sorted(bucket["active_days"])
+        ]
+        if len(daily_sales_values) >= 2 and sum(daily_sales_values) > 0:
+            mean_daily_sales = sum(daily_sales_values) / len(daily_sales_values)
+            daily_cv = pstdev(daily_sales_values) / mean_daily_sales if mean_daily_sales else 0.0
+            stability_score = round(100.0 / (1.0 + daily_cv), 1)
+            if stability_score >= 85:
+                stability_label = "ثابت جدًا"
+            elif stability_score >= 70:
+                stability_label = "ثابت"
+            elif stability_score >= 55:
+                stability_label = "متوسط"
+            else:
+                stability_label = "متذبذب"
+        else:
+            stability_score = None
+            stability_label = "بيانات غير كافية"
+
         # V26: details page shows only cash invoices above 100 LYD, highest value first.
         doctor_invoices = [invoice for invoice in doctor_invoices if invoice["net_total"] > 100]
         doctor_invoices.sort(
@@ -314,7 +345,13 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
             "return_count": int(bucket["return_count"]),
             "active_days": active_days_count,
             "average_invoice": average_invoice,
+            "median_invoice": median_invoice,
             "daily_average": daily_average,
+            "invoices_per_active_day": invoices_per_active_day,
+            "high_value_invoice_count": high_value_invoice_count,
+            "high_value_invoice_percentage": high_value_invoice_percentage,
+            "stability_score": stability_score,
+            "stability_label": stability_label,
             "unique_items": len(bucket["unique_items"]),
             "average_items_per_invoice": avg_items_per_invoice,
             "sales_lines": int(bucket["sales_lines"]),

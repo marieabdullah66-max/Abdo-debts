@@ -332,11 +332,16 @@ function renderDoctorSalesDetail(main,doctor){
     <div class="stat"><div class="label">عدد الفواتير</div><div class="value">${Number(doctor.invoice_count||0).toLocaleString('en-US')}</div></div>
     <div class="stat"><div class="label">أيام النشاط</div><div class="value">${Number(doctor.active_days||0).toLocaleString('en-US')}</div></div>
     <div class="stat"><div class="label">متوسط الفاتورة</div><div class="value">${money(doctor.average_invoice)}</div></div>
+    <div class="stat"><div class="label">Median الفاتورة</div><div class="value">${money(doctor.median_invoice)}</div></div>
     <div class="stat"><div class="label">المتوسط اليومي</div><div class="value">${money(doctor.daily_average)}</div></div>
+    <div class="stat"><div class="label">فواتير / يوم نشاط</div><div class="value">${Number(doctor.invoices_per_active_day||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div></div>
+    <div class="stat"><div class="label">نسبة الفواتير فوق 100</div><div class="value">${Number(doctor.high_value_invoice_percentage||0).toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})}%</div><small>${Number(doctor.high_value_invoice_count||0).toLocaleString('en-US')} فاتورة</small></div>
+    <div class="stat"><div class="label">ثبات الأداء</div><div class="value">${doctor.stability_score==null?'—':`${Number(doctor.stability_score).toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})}%`}</div><small>${esc(doctor.stability_label||'—')}</small></div>
     <div class="stat"><div class="label">متوسط الأصناف/فاتورة</div><div class="value">${Number(doctor.average_items_per_invoice||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}</div></div>
     <div class="stat"><div class="label">الأصناف المختلفة المباعة</div><div class="value">${Number(doctor.unique_items||0).toLocaleString('en-US')}</div></div>
     <div class="stat"><div class="label">المرتجعات النقدية</div><div class="value">${money(doctor.returns_total)}</div></div>
   </div>
+  <div class="muted doctor-stability-note">ثبات الأداء يقيس انتظام قيمة المبيعات النقدية بين أيام النشاط؛ كلما ارتفعت النسبة كان الأداء اليومي أكثر استقرارًا.</div>
   <section class="panel doctor-top-items-panel"><div class="section-head"><div><h3>أكثر 50 صنف بيعًا</h3><div class="muted">يظهر أول 10 أصناف فقط، ويمكن عرض القائمة كاملة عند الحاجة.</div></div>${topItems.length>10?`<button class="btn btn-soft btn-sm" id="doctorTopItemsToggle">إظهار الكل (${Number(topItems.length).toLocaleString('en-US')})</button>`:''}</div><div id="doctorTopItemsBody">${renderDoctorTopItems(topItems.slice(0,10))}</div></section>
   <section class="panel doctor-invoices-panel"><div class="section-head"><div><h3>الفواتير فوق 100 د.ل</h3><div class="muted">${Number(invoices.length).toLocaleString('en-US')} فاتورة بيع نقدية قيمتها أكبر من 100 د.ل — مرتبة من الأعلى إلى الأقل</div></div></div>${renderDoctorInvoices(invoices)}</section>`;
   document.getElementById('doctorSalesBack').onclick=()=>{state.doctorSalesSelectedDoctor='';doctorSalesView(main);};
