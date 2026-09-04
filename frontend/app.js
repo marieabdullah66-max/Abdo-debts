@@ -22,6 +22,7 @@ const state = {
   itemCatalogRequestSeq: 0,
   movementReports: [], movementRows: [], movementReport: null, movementReportId: '', movementBranchId: '', movementSearch: '', movementStatus: 'all', movementSort: 'desc',
   doctorSalesAnalysis: null, doctorSalesSearch: '', doctorSalesSort: 'net_desc', doctorSalesFileName: '', doctorSalesSelectedDoctor: '',
+  doctorCompareSortKey: 'net_sales', doctorCompareSortDir: 'desc', doctorCompareA: '', doctorCompareB: '',
   paymentPlanBranchId: '',
   paymentPlanStatus: 'open',
   paymentPlanSearch: '',
@@ -220,13 +221,13 @@ function syncStickyOffsets(){
 }
 function renderApp(){
   if(!state.profile)return renderLogin();
-  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',doctorsales:'view_doctor_sales',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
+  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',doctorsales:'view_doctor_sales',doctorcompare:'view_doctor_sales',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
   if(allowedViews[state.view] && !can(allowedViews[state.view])) state.view=can('view_dashboard')?'dashboard':can('view_invoices')?'invoices':'settings';
   const settingsVisible=can('manage_branches')||can('manage_suppliers')||can('manage_users');
   root.innerHTML=`<div class="app">
     <header class="topbar"><div class="topbar-inner"><div class="top-title"><div>💰</div><div><strong>Abdo Debts</strong><small>نظام المديونيات</small></div></div><div class="user-box">${notificationAccess()?`<button class="notification-bell" id="notificationBell" aria-label="الإشعارات" title="الإشعارات">🔔<span id="notificationBadge" class="notification-badge ${state.notificationUnread>0?'':'hidden'}">${state.notificationUnread>99?'99+':state.notificationUnread}</span></button>`:''}<span class="user-name">${esc(state.profile.full_name)}</span><button class="btn btn-ghost btn-sm" id="logoutBtn">خروج</button></div></div></header>
     <main class="main" id="main"></main>
-    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
+    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('doctorcompare','⚖️','مقارنة الدكاترة','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
   </div>`;
   document.getElementById('logoutBtn').onclick=logout;const bell=document.getElementById('notificationBell');if(bell)bell.onclick=openNotifications;updateNotificationBell();
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
@@ -240,6 +241,7 @@ async function renderView(){const main=document.getElementById('main');main.inne
   if(state.view==='dashboard')await dashboardView(main);
   else if(state.view==='items')await itemsView(main);
   else if(state.view==='doctorsales')await doctorSalesView(main);
+  else if(state.view==='doctorcompare')await doctorComparisonView(main);
   else if(state.view==='suppliers')await suppliersView(main);
   else if(state.view==='supplier')await supplierDetailView(main);
   else if(state.view==='invoices')await invoicesView(main);
@@ -275,10 +277,11 @@ function doctorSalesSelected(){
 async function doctorSalesView(main){
   const selected=doctorSalesSelected();
   if(selected){renderDoctorSalesDetail(main,selected);return;}
-  main.innerHTML=`<div class="page-head doctor-sales-head"><div><h2>مبيعات الدكاترة</h2><div class="muted">تحليل أداء الدكاترة من المبيعات النقدية فقط — مبيعات الآجل مستبعدة بالكامل.</div></div><div class="page-head-actions"><button class="btn btn-primary" id="doctorSalesUpload">رفع تقرير مبيعات</button><input id="doctorSalesFile" type="file" accept=".csv,text/csv" hidden></div></div>
+  main.innerHTML=`<div class="page-head doctor-sales-head"><div><h2>مبيعات الدكاترة</h2><div class="muted">تحليل أداء الدكاترة من المبيعات النقدية فقط — مبيعات الآجل مستبعدة بالكامل.</div></div><div class="page-head-actions">${state.doctorSalesAnalysis?'<button class="btn btn-soft" id="doctorCompareOpen">⚖️ مقارنة الدكاترة</button>':''}<button class="btn btn-primary" id="doctorSalesUpload">رفع تقرير مبيعات</button><input id="doctorSalesFile" type="file" accept=".csv,text/csv" hidden></div></div>
   <section class="panel doctor-sales-upload-note"><strong>طريقة الحساب</strong><span>نحسب المبيعات النقدية فقط، ونطرح المرتجعات النقدية من الصافي. أيام النشاط = الأيام التي تحتوي على فاتورة بيع نقدية، والمتوسط اليومي = صافي المبيعات ÷ أيام النشاط.</span></section>
   <div id="doctorSalesResults">${state.doctorSalesAnalysis?'<div class="loading">جاري عرض التحليل...</div>':'<section class="panel"><div class="empty">ارفع تقرير المبيعات لعرض أداء الدكاترة.</div></section>'}</div>`;
-  const fileInput=document.getElementById('doctorSalesFile'),uploadBtn=document.getElementById('doctorSalesUpload');
+  const fileInput=document.getElementById('doctorSalesFile'),uploadBtn=document.getElementById('doctorSalesUpload'),compareBtn=document.getElementById('doctorCompareOpen');
+  if(compareBtn)compareBtn.onclick=()=>go('doctorcompare');
   uploadBtn.onclick=()=>fileInput.click();
   fileInput.onchange=async()=>{
     const file=fileInput.files?.[0];if(!file)return;
@@ -359,6 +362,116 @@ function renderDoctorInvoices(rows){
   const desktop=`<div class="table-wrap desktop-table"><table class="doctor-invoices-table"><thead><tr><th>#</th><th>رقم الفاتورة/الحركة</th><th>التاريخ والوقت</th><th>عدد الأصناف</th><th>قيمة الفاتورة</th></tr></thead><tbody>${rows.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.movement_number)}</strong></td><td>${esc(x.date||'—')}</td><td>${Number(x.item_count||0).toLocaleString('en-US')}</td><td class="money">${money(x.net_total)}</td></tr>`).join('')}</tbody></table></div>`;
   const mobile=`<div class="mobile-list doctor-invoice-mobile">${rows.map((x,i)=>`<div class="item-card"><div class="item-title"><span>#${esc(x.movement_number)}</span><strong>${money(x.net_total)}</strong></div><div class="item-meta"><div><span>التاريخ</span><strong>${esc(x.date||'—')}</strong></div><div><span>عدد الأصناف</span><strong>${Number(x.item_count||0).toLocaleString('en-US')}</strong></div></div></div>`).join('')}</div>`;
   return desktop+mobile;
+}
+
+
+const DOCTOR_COMPARE_METRICS = [
+  {key:'net_sales',label:'صافي المبيعات',format:'money'},
+  {key:'active_days',label:'أيام النشاط',format:'int'},
+  {key:'daily_average',label:'المبيعات / يوم نشاط',format:'money'},
+  {key:'invoice_count',label:'عدد الفواتير',format:'int'},
+  {key:'invoices_per_active_day',label:'فواتير / يوم نشاط',format:'num2'},
+  {key:'average_invoice',label:'متوسط الفاتورة',format:'money'},
+  {key:'median_invoice',label:'Median الفاتورة',format:'money'},
+  {key:'average_items_per_invoice',label:'أصناف / فاتورة',format:'num2'},
+  {key:'unique_items',label:'الأصناف المختلفة',format:'int'},
+  {key:'high_value_invoice_count',label:'فواتير فوق 100',format:'int'},
+  {key:'high_value_invoice_percentage',label:'نسبة الفواتير فوق 100',format:'percent'},
+  {key:'stability_score',label:'ثبات الأداء',format:'percentNullable'},
+];
+function doctorCompareNumber(doctor,key){
+  const value=doctor?.[key];
+  if(value===null||value===undefined||value==='')return null;
+  const n=Number(value);return Number.isFinite(n)?n:null;
+}
+function doctorCompareFormat(value,format){
+  if(value===null||value===undefined||!Number.isFinite(Number(value)))return '—';
+  const n=Number(value);
+  if(format==='money')return money(n);
+  if(format==='int')return n.toLocaleString('en-US',{maximumFractionDigits:0});
+  if(format==='num2')return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  if(format==='percent'||format==='percentNullable')return `${n.toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})}%`;
+  return n.toLocaleString('en-US',{maximumFractionDigits:2});
+}
+function doctorCompareMetric(key){return DOCTOR_COMPARE_METRICS.find(x=>x.key===key)||DOCTOR_COMPARE_METRICS[0];}
+function doctorCompareSortedRows(){
+  const rows=[...(state.doctorSalesAnalysis?.doctors||[])],key=state.doctorCompareSortKey||'net_sales',dir=state.doctorCompareSortDir==='asc'?1:-1;
+  rows.sort((a,b)=>{
+    const av=doctorCompareNumber(a,key),bv=doctorCompareNumber(b,key);
+    if(av===null&&bv===null)return String(a.doctor||'').localeCompare(String(b.doctor||''),'ar');
+    if(av===null)return 1;if(bv===null)return -1;
+    const diff=(av-bv)*dir;
+    return diff||Number(b.net_sales||0)-Number(a.net_sales||0)||String(a.doctor||'').localeCompare(String(b.doctor||''),'ar');
+  });
+  return rows;
+}
+function doctorCompareBest(key){
+  return (state.doctorSalesAnalysis?.doctors||[]).filter(x=>doctorCompareNumber(x,key)!==null).sort((a,b)=>Number(b[key]||0)-Number(a[key]||0))[0]||null;
+}
+async function doctorComparisonView(main){
+  const data=state.doctorSalesAnalysis;
+  if(!data){
+    main.innerHTML=`<div class="page-head"><div><h2>مقارنة الدكاترة</h2><div class="muted">ارفع تقرير المبيعات أولًا حتى نقدر نقارن الدكاترة.</div></div></div><section class="panel"><div class="empty">لا يوجد تحليل مبيعات محمّل حاليًا.<br><button class="btn btn-primary" id="doctorCompareGoUpload" style="margin-top:12px">الذهاب لمبيعات الدكاترة</button></div></section>`;
+    document.getElementById('doctorCompareGoUpload').onclick=()=>go('doctorsales');return;
+  }
+  const doctors=data.doctors||[];
+  if(!doctors.length){main.innerHTML='<section class="panel"><div class="empty">لا توجد بيانات دكاترة للمقارنة.</div></section>';return;}
+  if(!doctors.some(x=>x.doctor_key===state.doctorCompareA))state.doctorCompareA=doctors[0]?.doctor_key||'';
+  if(!doctors.some(x=>x.doctor_key===state.doctorCompareB)||state.doctorCompareB===state.doctorCompareA)state.doctorCompareB=doctors.find(x=>x.doctor_key!==state.doctorCompareA)?.doctor_key||state.doctorCompareA;
+  const bestNet=doctorCompareBest('net_sales'),bestDaily=doctorCompareBest('daily_average'),bestAvg=doctorCompareBest('average_invoice'),bestInvoicesDay=doctorCompareBest('invoices_per_active_day'),bestStability=doctorCompareBest('stability_score');
+  main.innerHTML=`<div class="page-head doctor-compare-head"><div><h2>مقارنة الدكاترة</h2><div class="muted">مقارنة المبيعات النقدية فقط خلال ${esc(data.period_start||'—')} ← ${esc(data.period_end||'—')}</div></div><div class="page-head-actions"><button class="btn btn-soft" id="doctorCompareBack">← مبيعات الدكاترة</button></div></div>
+  <div class="doctor-compare-leaders">
+    ${renderDoctorCompareLeader('الأعلى صافي مبيعات',bestNet,'net_sales','money')}
+    ${renderDoctorCompareLeader('الأعلى مبيعات/يوم',bestDaily,'daily_average','money')}
+    ${renderDoctorCompareLeader('الأعلى متوسط فاتورة',bestAvg,'average_invoice','money')}
+    ${renderDoctorCompareLeader('الأعلى فواتير/يوم',bestInvoicesDay,'invoices_per_active_day','num2')}
+    ${renderDoctorCompareLeader('الأكثر ثباتًا',bestStability,'stability_score','percentNullable')}
+  </div>
+  <section class="panel doctor-pair-panel"><div class="section-head"><div><h3>دكتور ضد دكتور</h3><div class="muted">اختر دكتورين وشوف الفرق في كل مؤشر مباشرة.</div></div></div>
+    <div class="doctor-pair-selectors"><div class="field"><label>الدكتور الأول</label><select class="select" id="doctorCompareA">${doctorCompareOptions(doctors,state.doctorCompareA)}</select></div><div class="doctor-vs-badge">VS</div><div class="field"><label>الدكتور الثاني</label><select class="select" id="doctorCompareB">${doctorCompareOptions(doctors,state.doctorCompareB)}</select></div></div>
+    <div id="doctorPairResults"></div>
+  </section>
+  <section class="panel doctor-all-compare-panel"><div class="section-head"><div><h3>مقارنة الجميع</h3><div class="muted">اضغط على عنوان أي عمود لترتيب الدكاترة، أو استخدم خيارات الترتيب.</div></div></div>
+    <div class="doctor-compare-toolbar"><select class="select" id="doctorCompareSortMetric">${DOCTOR_COMPARE_METRICS.map(m=>`<option value="${m.key}">${esc(m.label)}</option>`).join('')}</select><button class="btn btn-soft" id="doctorCompareDir">${state.doctorCompareSortDir==='asc'?'من الأقل للأعلى ↑':'من الأعلى للأقل ↓'}</button></div>
+    <div id="doctorAllCompare"></div>
+  </section>`;
+  document.getElementById('doctorCompareBack').onclick=()=>go('doctorsales');
+  const a=document.getElementById('doctorCompareA'),b=document.getElementById('doctorCompareB');
+  a.onchange=()=>{state.doctorCompareA=a.value;if(state.doctorCompareB===a.value){const alt=doctors.find(x=>x.doctor_key!==a.value);if(alt)state.doctorCompareB=alt.doctor_key;b.value=state.doctorCompareB;}renderDoctorPairComparison();};
+  b.onchange=()=>{state.doctorCompareB=b.value;if(state.doctorCompareA===b.value){const alt=doctors.find(x=>x.doctor_key!==b.value);if(alt)state.doctorCompareA=alt.doctor_key;a.value=state.doctorCompareA;}renderDoctorPairComparison();};
+  const metric=document.getElementById('doctorCompareSortMetric'),dir=document.getElementById('doctorCompareDir');metric.value=state.doctorCompareSortKey||'net_sales';
+  metric.onchange=()=>{state.doctorCompareSortKey=metric.value;renderDoctorAllComparison();};
+  dir.onclick=()=>{state.doctorCompareSortDir=state.doctorCompareSortDir==='asc'?'desc':'asc';dir.textContent=state.doctorCompareSortDir==='asc'?'من الأقل للأعلى ↑':'من الأعلى للأقل ↓';renderDoctorAllComparison();};
+  renderDoctorPairComparison();renderDoctorAllComparison();
+}
+function renderDoctorCompareLeader(label,doctor,key,format){
+  if(!doctor)return `<div class="stat doctor-leader-card"><div class="label">${esc(label)}</div><div class="value">—</div></div>`;
+  return `<div class="stat doctor-leader-card"><div class="label">${esc(label)}</div><div class="doctor-leader-name">${esc(doctor.doctor)}</div><div class="value">${doctorCompareFormat(doctorCompareNumber(doctor,key),format)}</div></div>`;
+}
+function doctorCompareOptions(doctors,selected){return doctors.map(x=>`<option value="${esc(x.doctor_key)}" ${x.doctor_key===selected?'selected':''}>${esc(x.doctor)}</option>`).join('');}
+function doctorByKey(key){return (state.doctorSalesAnalysis?.doctors||[]).find(x=>x.doctor_key===key)||null;}
+function renderDoctorPairComparison(){
+  const box=document.getElementById('doctorPairResults');if(!box)return;const a=doctorByKey(state.doctorCompareA),b=doctorByKey(state.doctorCompareB);if(!a||!b){box.innerHTML='<div class="empty">اختر دكتورين للمقارنة.</div>';return;}
+  const rows=DOCTOR_COMPARE_METRICS.map(metric=>{
+    const av=doctorCompareNumber(a,metric.key),bv=doctorCompareNumber(b,metric.key),both=av!==null&&bv!==null,diff=both?Math.abs(av-bv):null;
+    let winner='—',winnerClass='';if(both){if(Math.abs(av-bv)<1e-9)winner='تعادل';else if(av>bv){winner=a.doctor;winnerClass='winner-a';}else{winner=b.doctor;winnerClass='winner-b';}}
+    return `<tr><td><strong>${esc(metric.label)}</strong></td><td class="doctor-pair-value ${winnerClass==='winner-a'?'is-winner':''}">${doctorCompareFormat(av,metric.format)}</td><td class="doctor-pair-value ${winnerClass==='winner-b'?'is-winner':''}">${doctorCompareFormat(bv,metric.format)}</td><td>${diff===null?'—':doctorCompareFormat(diff,metric.format)}</td><td><span class="doctor-winner ${winnerClass}">${esc(winner)}</span></td></tr>`;
+  }).join('');
+  box.innerHTML=`<div class="doctor-pair-names"><div><span>الدكتور الأول</span><strong>${esc(a.doctor)}</strong></div><div><span>الدكتور الثاني</span><strong>${esc(b.doctor)}</strong></div></div><div class="table-wrap"><table class="doctor-pair-table"><thead><tr><th>المؤشر</th><th>${esc(a.doctor)}</th><th>${esc(b.doctor)}</th><th>الفرق</th><th>الأعلى</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function setDoctorCompareSort(key){
+  if(state.doctorCompareSortKey===key)state.doctorCompareSortDir=state.doctorCompareSortDir==='asc'?'desc':'asc';else{state.doctorCompareSortKey=key;state.doctorCompareSortDir='desc';}
+  const metric=document.getElementById('doctorCompareSortMetric'),dir=document.getElementById('doctorCompareDir');if(metric)metric.value=state.doctorCompareSortKey;if(dir)dir.textContent=state.doctorCompareSortDir==='asc'?'من الأقل للأعلى ↑':'من الأعلى للأقل ↓';renderDoctorAllComparison();
+}
+function renderDoctorAllComparison(){
+  const box=document.getElementById('doctorAllCompare');if(!box)return;const rows=doctorCompareSortedRows();
+  const cols=DOCTOR_COMPARE_METRICS.map(m=>`<th><button class="doctor-sort-head ${state.doctorCompareSortKey===m.key?'active':''}" data-compare-sort="${m.key}">${esc(m.label)}${state.doctorCompareSortKey===m.key?(state.doctorCompareSortDir==='asc'?' ↑':' ↓'):''}</button></th>`).join('');
+  const body=rows.map((x,i)=>`<tr><td>${i+1}</td><td class="doctor-compare-name"><strong>${esc(x.doctor)}</strong></td>${DOCTOR_COMPARE_METRICS.map(m=>`<td>${doctorCompareFormat(doctorCompareNumber(x,m.key),m.format)}</td>`).join('')}<td><button class="btn btn-soft btn-sm" data-compare-detail="${esc(x.doctor_key)}">التفاصيل</button></td></tr>`).join('');
+  const desktop=`<div class="table-wrap desktop-table doctor-all-table-wrap"><table class="doctor-all-compare-table"><thead><tr><th>#</th><th>الدكتور</th>${cols}<th></th></tr></thead><tbody>${body}</tbody></table></div>`;
+  const mobile=`<div class="mobile-list doctor-compare-mobile">${rows.map((x,i)=>`<div class="item-card"><div class="item-title"><span>${i+1}. ${esc(x.doctor)}</span><strong>${doctorCompareFormat(doctorCompareNumber(x,state.doctorCompareSortKey),doctorCompareMetric(state.doctorCompareSortKey).format)}</strong></div><div class="item-meta"><div><span>صافي المبيعات</span><strong>${money(x.net_sales)}</strong></div><div><span>مبيعات/يوم</span><strong>${money(x.daily_average)}</strong></div><div><span>فواتير/يوم</span><strong>${doctorCompareFormat(doctorCompareNumber(x,'invoices_per_active_day'),'num2')}</strong></div><div><span>متوسط الفاتورة</span><strong>${money(x.average_invoice)}</strong></div><div><span>Median</span><strong>${money(x.median_invoice)}</strong></div><div><span>ثبات الأداء</span><strong>${doctorCompareFormat(doctorCompareNumber(x,'stability_score'),'percentNullable')}</strong></div></div><button class="btn btn-soft doctor-sales-detail-btn" data-compare-detail="${esc(x.doctor_key)}">عرض التفاصيل</button></div>`).join('')}</div>`;
+  box.innerHTML=desktop+mobile;
+  box.querySelectorAll('[data-compare-sort]').forEach(btn=>btn.onclick=()=>setDoctorCompareSort(btn.dataset.compareSort));
+  box.querySelectorAll('[data-compare-detail]').forEach(btn=>btn.onclick=()=>{state.doctorSalesSelectedDoctor=btn.dataset.compareDetail||'';go('doctorsales');});
 }
 
 async function dashboardView(main){
