@@ -23,6 +23,8 @@ const state = {
   movementReports: [], movementRows: [], movementReport: null, movementReportId: '', movementBranchId: '', movementSearch: '', movementStatus: 'all', movementSort: 'desc',
   doctorSalesAnalysis: null, doctorSalesSearch: '', doctorSalesSort: 'net_desc', doctorSalesFileName: '', doctorSalesSelectedDoctor: '',
   doctorCompareSortKey: 'net_sales', doctorCompareSortDir: 'desc', doctorCompareA: '', doctorCompareB: '',
+  periodComparePrevious: null, periodCompareCurrent: null, periodComparePreviousFileName: '', periodCompareCurrentFileName: '',
+  periodCompareSortKey: 'improvement_score', periodCompareSortDir: 'desc', periodCompareSelectedDoctor: '', periodCompareItemsExpanded: false,
   paymentPlanBranchId: '',
   paymentPlanStatus: 'open',
   paymentPlanSearch: '',
@@ -221,13 +223,13 @@ function syncStickyOffsets(){
 }
 function renderApp(){
   if(!state.profile)return renderLogin();
-  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',doctorsales:'view_doctor_sales',doctorcompare:'view_doctor_sales',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
+  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',doctorsales:'view_doctor_sales',doctorcompare:'view_doctor_sales',doctorperiodcompare:'view_doctor_sales',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
   if(allowedViews[state.view] && !can(allowedViews[state.view])) state.view=can('view_dashboard')?'dashboard':can('view_invoices')?'invoices':'settings';
   const settingsVisible=can('manage_branches')||can('manage_suppliers')||can('manage_users');
   root.innerHTML=`<div class="app">
     <header class="topbar"><div class="topbar-inner"><div class="top-title"><div>💰</div><div><strong>Abdo Debts</strong><small>نظام المديونيات</small></div></div><div class="user-box">${notificationAccess()?`<button class="notification-bell" id="notificationBell" aria-label="الإشعارات" title="الإشعارات">🔔<span id="notificationBadge" class="notification-badge ${state.notificationUnread>0?'':'hidden'}">${state.notificationUnread>99?'99+':state.notificationUnread}</span></button>`:''}<span class="user-name">${esc(state.profile.full_name)}</span><button class="btn btn-ghost btn-sm" id="logoutBtn">خروج</button></div></div></header>
     <main class="main" id="main"></main>
-    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('doctorcompare','⚖️','مقارنة الدكاترة','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
+    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('doctorcompare','⚖️','مقارنة الدكاترة','view_doctor_sales')}${navButton('doctorperiodcompare','🔄','مقارنة الفترات','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
   </div>`;
   document.getElementById('logoutBtn').onclick=logout;const bell=document.getElementById('notificationBell');if(bell)bell.onclick=openNotifications;updateNotificationBell();
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
@@ -242,6 +244,7 @@ async function renderView(){const main=document.getElementById('main');main.inne
   else if(state.view==='items')await itemsView(main);
   else if(state.view==='doctorsales')await doctorSalesView(main);
   else if(state.view==='doctorcompare')await doctorComparisonView(main);
+  else if(state.view==='doctorperiodcompare')await doctorPeriodComparisonView(main);
   else if(state.view==='suppliers')await suppliersView(main);
   else if(state.view==='supplier')await supplierDetailView(main);
   else if(state.view==='invoices')await invoicesView(main);
@@ -277,11 +280,12 @@ function doctorSalesSelected(){
 async function doctorSalesView(main){
   const selected=doctorSalesSelected();
   if(selected){renderDoctorSalesDetail(main,selected);return;}
-  main.innerHTML=`<div class="page-head doctor-sales-head"><div><h2>مبيعات الدكاترة</h2><div class="muted">تحليل أداء الدكاترة من المبيعات النقدية فقط — مبيعات الآجل مستبعدة بالكامل.</div></div><div class="page-head-actions">${state.doctorSalesAnalysis?'<button class="btn btn-soft" id="doctorCompareOpen">⚖️ مقارنة الدكاترة</button>':''}<button class="btn btn-primary" id="doctorSalesUpload">رفع تقرير مبيعات</button><input id="doctorSalesFile" type="file" accept=".csv,text/csv" hidden></div></div>
+  main.innerHTML=`<div class="page-head doctor-sales-head"><div><h2>مبيعات الدكاترة</h2><div class="muted">تحليل أداء الدكاترة من المبيعات النقدية فقط — مبيعات الآجل مستبعدة بالكامل.</div></div><div class="page-head-actions">${state.doctorSalesAnalysis?'<button class="btn btn-soft" id="doctorCompareOpen">⚖️ مقارنة الدكاترة</button><button class="btn btn-soft" id="doctorPeriodCompareOpen">🔄 مقارنة الفترات</button>':''}<button class="btn btn-primary" id="doctorSalesUpload">رفع تقرير مبيعات</button><input id="doctorSalesFile" type="file" accept=".csv,text/csv" hidden></div></div>
   <section class="panel doctor-sales-upload-note"><strong>طريقة الحساب</strong><span>نحسب المبيعات النقدية فقط، ونطرح المرتجعات النقدية من الصافي. أيام النشاط = الأيام التي تحتوي على فاتورة بيع نقدية، والمتوسط اليومي = صافي المبيعات ÷ أيام النشاط.</span></section>
   <div id="doctorSalesResults">${state.doctorSalesAnalysis?'<div class="loading">جاري عرض التحليل...</div>':'<section class="panel"><div class="empty">ارفع تقرير المبيعات لعرض أداء الدكاترة.</div></section>'}</div>`;
-  const fileInput=document.getElementById('doctorSalesFile'),uploadBtn=document.getElementById('doctorSalesUpload'),compareBtn=document.getElementById('doctorCompareOpen');
+  const fileInput=document.getElementById('doctorSalesFile'),uploadBtn=document.getElementById('doctorSalesUpload'),compareBtn=document.getElementById('doctorCompareOpen'),periodCompareBtn=document.getElementById('doctorPeriodCompareOpen');
   if(compareBtn)compareBtn.onclick=()=>go('doctorcompare');
+  if(periodCompareBtn)periodCompareBtn.onclick=()=>go('doctorperiodcompare');
   uploadBtn.onclick=()=>fileInput.click();
   fileInput.onchange=async()=>{
     const file=fileInput.files?.[0];if(!file)return;
@@ -562,6 +566,281 @@ function renderDoctorAllComparison(){
   box.innerHTML=desktop+mobile;
   box.querySelectorAll('[data-compare-sort]').forEach(btn=>btn.onclick=()=>setDoctorCompareSort(btn.dataset.compareSort));
   box.querySelectorAll('[data-compare-detail]').forEach(btn=>btn.onclick=()=>{state.doctorSalesSelectedDoctor=btn.dataset.compareDetail||'';go('doctorsales');});
+}
+
+
+const PERIOD_COMPARE_OVERALL_METRICS = [
+  {key:'net_sales',label:'صافي المبيعات',format:'money'},
+  {key:'invoice_count',label:'عدد الفواتير',format:'int'},
+  {key:'active_days',label:'أيام النشاط',format:'int'},
+  {key:'daily_average',label:'المبيعات / يوم نشاط',format:'money'},
+  {key:'invoices_per_active_day',label:'فواتير / يوم نشاط',format:'num2'},
+  {key:'average_invoice',label:'متوسط الفاتورة',format:'money'},
+  {key:'median_invoice',label:'Median الفاتورة',format:'money'},
+  {key:'high_value_invoice_percentage',label:'نسبة الفواتير فوق 100',format:'percent',points:true},
+  {key:'unique_items',label:'الأصناف المختلفة',format:'int'},
+];
+const PERIOD_COMPARE_SORT_OPTIONS = [
+  {key:'improvement_score',label:'مؤشر التحسن الإجمالي'},
+  {key:'daily_average',label:'نمو المبيعات / يوم نشاط'},
+  {key:'invoices_per_active_day',label:'نمو الفواتير / يوم نشاط'},
+  {key:'average_invoice',label:'نمو متوسط الفاتورة'},
+  {key:'median_invoice',label:'نمو Median الفاتورة'},
+  {key:'net_sales',label:'نمو صافي المبيعات'},
+  {key:'high_value_invoice_percentage',label:'تغير نسبة الفواتير فوق 100'},
+  {key:'stability_score',label:'تغير ثبات الأداء'},
+];
+function periodComparePeriodLabel(data){
+  if(!data)return 'لم يتم رفع التقرير';
+  return `${data.period_start||'—'} ← ${data.period_end||'—'}`;
+}
+function periodCompareNum(value){
+  if(value===null||value===undefined||value==='')return null;
+  const n=Number(value);return Number.isFinite(n)?n:null;
+}
+function periodCompareRelativeChange(previous,current){
+  const p=periodCompareNum(previous),c=periodCompareNum(current);
+  if(p===null&&c===null)return null;
+  if(p===null)return null;
+  if(c===null)return -100;
+  if(Math.abs(p)<1e-9){
+    if(Math.abs(c)<1e-9)return 0;
+    return null;
+  }
+  return ((c-p)/Math.abs(p))*100;
+}
+function periodCompareChangeText(previous,current,{points=false}={}){
+  const p=periodCompareNum(previous),c=periodCompareNum(current);
+  if(p===null&&c===null)return '—';
+  if(p===null&&c!==null)return 'جديد';
+  if(p!==null&&c===null)return 'لم يظهر';
+  if(points){
+    const d=c-p,sign=d>0?'+':'';
+    return `${sign}${d.toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})} نقطة`;
+  }
+  const ch=periodCompareRelativeChange(p,c);
+  if(ch===null)return c>p?'جديد':'—';
+  const sign=ch>0?'+':'';
+  return `${sign}${ch.toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})}%`;
+}
+function periodCompareChangeClass(previous,current){
+  const p=periodCompareNum(previous),c=periodCompareNum(current);
+  if(p===null||c===null)return '';
+  if(Math.abs(c-p)<1e-9)return 'same';
+  return c>p?'up':'down';
+}
+function periodCompareImprovement(previous,current){
+  if(!previous)return null;
+  if(!current)return -100;
+  const keys=['daily_average','invoices_per_active_day','average_invoice','median_invoice'];
+  const changes=[];
+  for(const key of keys){
+    const p=periodCompareNum(previous[key]),c=periodCompareNum(current[key]);
+    if(p===null||c===null||p<=0)continue;
+    const value=((c-p)/p)*100;
+    changes.push(Math.max(-200,Math.min(200,value)));
+  }
+  if(!changes.length)return null;
+  return changes.reduce((a,b)=>a+b,0)/changes.length;
+}
+function periodCompareDoctorRows(){
+  const previous=state.periodComparePrevious?.doctors||[],current=state.periodCompareCurrent?.doctors||[];
+  const map=new Map();
+  previous.forEach(d=>map.set(d.doctor_key,{doctor_key:d.doctor_key,doctor:d.doctor,previous:d,current:null}));
+  current.forEach(d=>{
+    const row=map.get(d.doctor_key)||{doctor_key:d.doctor_key,doctor:d.doctor,previous:null,current:null};
+    row.current=d;row.doctor=d.doctor||row.doctor;map.set(d.doctor_key,row);
+  });
+  return [...map.values()].map(row=>({
+    ...row,
+    status:row.previous&&row.current?'مستمر':row.current?'جديد في الفترة الجديدة':'لم يظهر في الفترة الجديدة',
+    improvement_score:periodCompareImprovement(row.previous,row.current),
+  }));
+}
+function periodCompareMetricGrowth(row,key){
+  if(!row)return null;
+  if(key==='improvement_score')return row.improvement_score;
+  const p=row.previous?periodCompareNum(row.previous[key]):null,c=row.current?periodCompareNum(row.current[key]):null;
+  if(!row.previous)return null;
+  if(!row.current)return -100;
+  if(key==='high_value_invoice_percentage'||key==='stability_score'){
+    if(p===null||c===null)return null;
+    return c-p;
+  }
+  return periodCompareRelativeChange(p,c);
+}
+function periodCompareSortedDoctorRows(){
+  const rows=periodCompareDoctorRows(),key=state.periodCompareSortKey||'improvement_score',dir=state.periodCompareSortDir==='asc'?1:-1;
+  return rows.sort((a,b)=>{
+    const av=periodCompareMetricGrowth(a,key),bv=periodCompareMetricGrowth(b,key);
+    if(av===null&&bv===null)return String(a.doctor||'').localeCompare(String(b.doctor||''),'ar');
+    if(av===null)return 1;if(bv===null)return -1;
+    return (av-bv)*dir||String(a.doctor||'').localeCompare(String(b.doctor||''),'ar');
+  });
+}
+function periodCompareBestRow(mode='best'){
+  const rows=periodCompareDoctorRows().filter(x=>x.previous&&x.current&&x.improvement_score!==null);
+  rows.sort((a,b)=>Number(b.improvement_score)-Number(a.improvement_score));
+  return mode==='worst'?rows[rows.length-1]||null:rows[0]||null;
+}
+function periodCompareBestGrowth(key){
+  return periodCompareDoctorRows().filter(x=>x.previous&&x.current&&periodCompareMetricGrowth(x,key)!==null)
+    .sort((a,b)=>Number(periodCompareMetricGrowth(b,key))-Number(periodCompareMetricGrowth(a,key)))[0]||null;
+}
+function periodCompareDoctorByKey(data,key){return (data?.doctors||[]).find(x=>x.doctor_key===key)||null;}
+function periodCompareDoctorStatusBadge(row){
+  const cls=row.previous&&row.current?'matched':row.current?'new':'missing';
+  return `<span class="period-doctor-status ${cls}">${esc(row.status)}</span>`;
+}
+function periodCompareReportCard(slot,title,data,fileName){
+  const id=slot==='previous'?'PeriodComparePrevious':'PeriodCompareCurrent';
+  const currentAvailable=!!state.doctorSalesAnalysis;
+  return `<section class="panel period-upload-card ${data?'loaded':''}">
+    <div class="period-upload-head"><div><span class="period-step">${slot==='previous'?'1':'2'}</span><h3>${esc(title)}</h3></div>${data?'<span class="badge badge-green">جاهز</span>':'<span class="badge">مطلوب</span>'}</div>
+    ${data?`<div class="period-upload-info"><strong>${esc(periodComparePeriodLabel(data))}</strong><span>${Number(data.doctor_count||0).toLocaleString('en-US')} دكتور · ${Number(data.totals?.invoice_count||0).toLocaleString('en-US')} فاتورة نقدية</span>${fileName?`<small>${esc(fileName)}</small>`:''}</div>`:'<div class="muted period-upload-empty">ارفع تقرير المبيعات CSV لهذه الفترة.</div>'}
+    <div class="period-upload-actions"><button class="btn ${data?'btn-soft':'btn-primary'}" id="upload${id}">${data?'تغيير التقرير':'رفع التقرير'}</button>${currentAvailable?`<button class="btn btn-ghost" id="useCurrent${id}">استخدام التقرير المحمّل</button>`:''}<input id="file${id}" type="file" accept=".csv,text/csv" hidden></div>
+  </section>`;
+}
+async function periodCompareAnalyzeFile(file,slot){
+  if(!file)return;
+  const body=new FormData();body.append('file',file);
+  toast(`جاري تحليل ${slot==='previous'?'الفترة السابقة':'الفترة الجديدة'}...`);
+  try{
+    const data=await api('/api/doctor-sales/analyze',{method:'POST',body});
+    if(slot==='previous'){state.periodComparePrevious=data;state.periodComparePreviousFileName=file.name;}
+    else{state.periodCompareCurrent=data;state.periodCompareCurrentFileName=file.name;}
+    state.periodCompareSelectedDoctor='';state.periodCompareItemsExpanded=false;
+    await doctorPeriodComparisonView(document.getElementById('main'));
+    toast('تم تحليل التقرير وإضافته للمقارنة');
+  }catch(e){toast(e.message,true);}
+}
+async function doctorPeriodComparisonView(main){
+  if(state.periodCompareSelectedDoctor&&state.periodComparePrevious&&state.periodCompareCurrent){
+    renderPeriodDoctorDetail(main,state.periodCompareSelectedDoctor);return;
+  }
+  const previous=state.periodComparePrevious,current=state.periodCompareCurrent,both=!!(previous&&current);
+  main.innerHTML=`<div class="page-head period-compare-head"><div><h2>مقارنة الفترات</h2><div class="muted">قارن تقرير مبيعات بفترة أخرى لمعرفة التحسن أو التراجع على مستوى الصيدلية وكل دكتور.</div></div><div class="page-head-actions">${both?'<button class="btn btn-soft" id="periodComparePdf">🧾 تصدير المقارنة PDF</button><button class="btn btn-ghost" id="periodCompareSwap">⇄ تبديل الفترتين</button>':''}<button class="btn btn-soft" id="periodCompareBack">← مبيعات الدكاترة</button></div></div>
+  <section class="panel period-compare-note"><strong>مقارنة عادلة للفترات المختلفة</strong><span>إجمالي المبيعات يظهر كما هو، لكن مؤشر التحسن يعتمد على المبيعات/يوم، فواتير/يوم، متوسط الفاتورة وMedian حتى لا نظلم دكتورًا عمل أيامًا أقل.</span></section>
+  <div class="period-upload-grid">
+    ${periodCompareReportCard('previous','الفترة السابقة',previous,state.periodComparePreviousFileName)}
+    ${periodCompareReportCard('current','الفترة الجديدة',current,state.periodCompareCurrentFileName)}
+  </div>
+  <div id="periodCompareResults">${both?'<div class="loading">جاري تجهيز المقارنة...</div>':'<section class="panel"><div class="empty">ارفع التقريرين حتى تظهر المقارنة.</div></section>'}</div>`;
+  document.getElementById('periodCompareBack').onclick=()=>go('doctorsales');
+  for(const slot of ['Previous','Current']){
+    const lower=slot==='Previous'?'previous':'current',upload=document.getElementById(`uploadPeriodCompare${slot}`),input=document.getElementById(`filePeriodCompare${slot}`),use=document.getElementById(`useCurrentPeriodCompare${slot}`);
+    if(upload&&input){upload.onclick=()=>input.click();input.onchange=()=>periodCompareAnalyzeFile(input.files?.[0],lower);}
+    if(use)use.onclick=async()=>{
+      if(lower==='previous'){state.periodComparePrevious=state.doctorSalesAnalysis;state.periodComparePreviousFileName=state.doctorSalesFileName||'التقرير المحمّل';}
+      else{state.periodCompareCurrent=state.doctorSalesAnalysis;state.periodCompareCurrentFileName=state.doctorSalesFileName||'التقرير المحمّل';}
+      state.periodCompareSelectedDoctor='';state.periodCompareItemsExpanded=false;await doctorPeriodComparisonView(main);
+    };
+  }
+  const swap=document.getElementById('periodCompareSwap');
+  if(swap)swap.onclick=async()=>{
+    [state.periodComparePrevious,state.periodCompareCurrent]=[state.periodCompareCurrent,state.periodComparePrevious];
+    [state.periodComparePreviousFileName,state.periodCompareCurrentFileName]=[state.periodCompareCurrentFileName,state.periodComparePreviousFileName];
+    state.periodCompareSelectedDoctor='';state.periodCompareItemsExpanded=false;await doctorPeriodComparisonView(main);
+  };
+  const pdf=document.getElementById('periodComparePdf');if(pdf)pdf.onclick=exportPeriodComparisonPdf;
+  if(both)renderPeriodComparisonResults();
+}
+function periodCompareOverallValue(data,key){
+  return periodCompareNum(data?.totals?.[key]);
+}
+function renderPeriodComparisonResults(){
+  const box=document.getElementById('periodCompareResults'),previous=state.periodComparePrevious,current=state.periodCompareCurrent;if(!box||!previous||!current)return;
+  const overallCards=PERIOD_COMPARE_OVERALL_METRICS.map(m=>{
+    const p=periodCompareOverallValue(previous,m.key),c=periodCompareOverallValue(current,m.key),cls=periodCompareChangeClass(p,c);
+    return `<div class="period-metric-card"><div class="label">${esc(m.label)}</div><div class="period-values"><span><small>السابقة</small><strong>${doctorCompareFormat(p,m.format)}</strong></span><span><small>الجديدة</small><strong>${doctorCompareFormat(c,m.format)}</strong></span></div><div class="period-change ${cls}">${periodCompareChangeText(p,c,{points:!!m.points})}</div></div>`;
+  }).join('');
+  const best=periodCompareBestRow('best'),worst=periodCompareBestRow('worst'),bestDaily=periodCompareBestGrowth('daily_average'),bestAvg=periodCompareBestGrowth('average_invoice'),bestInvDay=periodCompareBestGrowth('invoices_per_active_day');
+  const leader=(label,row,key='improvement_score')=>{
+    if(!row)return `<div class="stat period-leader-card"><div class="label">${esc(label)}</div><div class="value">—</div></div>`;
+    const value=key==='improvement_score'?row.improvement_score:periodCompareMetricGrowth(row,key);
+    return `<div class="stat period-leader-card"><div class="label">${esc(label)}</div><div class="period-leader-name">${esc(row.doctor)}</div><div class="value ${Number(value)>=0?'period-positive':'period-negative'}">${Number(value)>=0?'+':''}${Number(value).toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})}%</div></div>`;
+  };
+  box.innerHTML=`<section class="panel period-summary-panel"><div class="section-head"><div><h3>الصيدلية ككل</h3><div class="muted">${esc(periodComparePeriodLabel(previous))} مقابل ${esc(periodComparePeriodLabel(current))}</div></div></div><div class="period-overall-grid">${overallCards}</div></section>
+  <div class="period-leaders-grid">${leader('الأكثر تحسنًا إجمالًا',best)}${leader('الأكثر تراجعًا',worst)}${leader('أعلى نمو مبيعات/يوم',bestDaily,'daily_average')}${leader('أعلى نمو متوسط فاتورة',bestAvg,'average_invoice')}${leader('أعلى نمو فواتير/يوم',bestInvDay,'invoices_per_active_day')}</div>
+  <section class="panel period-doctors-panel"><div class="section-head"><div><h3>مقارنة كل الدكاترة</h3><div class="muted">مؤشر التحسن = متوسط تغير المبيعات/يوم + فواتير/يوم + متوسط الفاتورة + Median.</div></div></div>
+    <div class="period-compare-toolbar"><select class="select" id="periodCompareSort">${PERIOD_COMPARE_SORT_OPTIONS.map(x=>`<option value="${x.key}">${esc(x.label)}</option>`).join('')}</select><button class="btn btn-soft" id="periodCompareSortDir">${state.periodCompareSortDir==='asc'?'الأقل للأعلى ↑':'الأعلى للأقل ↓'}</button></div>
+    <div id="periodDoctorsTable"></div>
+  </section>`;
+  const sort=document.getElementById('periodCompareSort'),dir=document.getElementById('periodCompareSortDir');sort.value=state.periodCompareSortKey||'improvement_score';
+  sort.onchange=()=>{state.periodCompareSortKey=sort.value;renderPeriodDoctorsTable();};
+  dir.onclick=()=>{state.periodCompareSortDir=state.periodCompareSortDir==='asc'?'desc':'asc';dir.textContent=state.periodCompareSortDir==='asc'?'الأقل للأعلى ↑':'الأعلى للأقل ↓';renderPeriodDoctorsTable();};
+  renderPeriodDoctorsTable();
+}
+function periodCompareGrowthBadge(row,key){
+  const value=periodCompareMetricGrowth(row,key);
+  if(value===null)return row.previous?'—':'جديد';
+  const cls=value>0?'up':value<0?'down':'same',sign=value>0?'+':'';
+  return `<span class="period-growth ${cls}">${sign}${Number(value).toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})}${key==='high_value_invoice_percentage'||key==='stability_score'?' نقطة':'%'}</span>`;
+}
+function renderPeriodDoctorsTable(){
+  const box=document.getElementById('periodDoctorsTable');if(!box)return;const rows=periodCompareSortedDoctorRows();
+  const desktop=`<div class="table-wrap desktop-table period-doctor-table-wrap"><table class="period-doctor-table"><thead><tr><th>#</th><th>الدكتور</th><th>الحالة</th><th>صافي سابق</th><th>صافي جديد</th><th>Δ الصافي</th><th>مبيعات/يوم سابق</th><th>مبيعات/يوم جديد</th><th>Δ اليومي</th><th>متوسط فاتورة سابق</th><th>متوسط فاتورة جديد</th><th>فواتير/يوم سابق</th><th>فواتير/يوم جديد</th><th>مؤشر التحسن</th><th></th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td>${i+1}</td><td class="doctor-compare-name"><strong>${esc(r.doctor)}</strong></td><td>${periodCompareDoctorStatusBadge(r)}</td><td class="money">${r.previous?money(r.previous.net_sales):'—'}</td><td class="money">${r.current?money(r.current.net_sales):'—'}</td><td>${periodCompareGrowthBadge(r,'net_sales')}</td><td class="money">${r.previous?money(r.previous.daily_average):'—'}</td><td class="money">${r.current?money(r.current.daily_average):'—'}</td><td>${periodCompareGrowthBadge(r,'daily_average')}</td><td class="money">${r.previous?money(r.previous.average_invoice):'—'}</td><td class="money">${r.current?money(r.current.average_invoice):'—'}</td><td>${r.previous?doctorCompareFormat(r.previous.invoices_per_active_day,'num2'):'—'}</td><td>${r.current?doctorCompareFormat(r.current.invoices_per_active_day,'num2'):'—'}</td><td>${r.improvement_score===null?'—':`<strong class="${r.improvement_score>=0?'period-positive':'period-negative'}">${r.improvement_score>=0?'+':''}${r.improvement_score.toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})}%</strong>`}</td><td><button class="btn btn-soft btn-sm" data-period-doctor="${esc(r.doctor_key)}">التفاصيل</button></td></tr>`).join('')}</tbody></table></div>`;
+  const mobile=`<div class="mobile-list period-doctor-mobile">${rows.map(r=>`<div class="item-card"><div class="item-title"><span>${esc(r.doctor)}</span>${periodCompareDoctorStatusBadge(r)}</div><div class="item-meta"><div><span>صافي السابقة</span><strong>${r.previous?money(r.previous.net_sales):'—'}</strong></div><div><span>صافي الجديدة</span><strong>${r.current?money(r.current.net_sales):'—'}</strong></div><div><span>تغير مبيعات/يوم</span><strong>${periodCompareGrowthBadge(r,'daily_average')}</strong></div><div><span>تغير متوسط الفاتورة</span><strong>${periodCompareGrowthBadge(r,'average_invoice')}</strong></div><div><span>تغير فواتير/يوم</span><strong>${periodCompareGrowthBadge(r,'invoices_per_active_day')}</strong></div><div><span>مؤشر التحسن</span><strong class="${Number(r.improvement_score)>=0?'period-positive':'period-negative'}">${r.improvement_score===null?'—':`${r.improvement_score>=0?'+':''}${r.improvement_score.toFixed(1)}%`}</strong></div></div><button class="btn btn-soft doctor-sales-detail-btn" data-period-doctor="${esc(r.doctor_key)}">تفاصيل مقارنة الدكتور</button></div>`).join('')}</div>`;
+  box.innerHTML=desktop+mobile;
+  box.querySelectorAll('[data-period-doctor]').forEach(btn=>btn.onclick=()=>{state.periodCompareSelectedDoctor=btn.dataset.periodDoctor||'';state.periodCompareItemsExpanded=false;doctorPeriodComparisonView(document.getElementById('main'));});
+}
+function periodCompareMetricChangeCell(previous,current,metric){
+  const p=previous?doctorCompareNumber(previous,metric.key):null,c=current?doctorCompareNumber(current,metric.key):null;
+  const points=metric.key==='high_value_invoice_percentage'||metric.key==='stability_score';
+  return `<tr><td><strong>${esc(metric.label)}</strong></td><td>${doctorCompareFormat(p,metric.format)}</td><td>${doctorCompareFormat(c,metric.format)}</td><td><span class="period-growth ${periodCompareChangeClass(p,c)}">${periodCompareChangeText(p,c,{points})}</span></td></tr>`;
+}
+function periodItemIdentity(item){
+  const ref=String(item?.item_ref||'').trim();if(ref&&ref!=='0')return `ref:${ref}`;
+  return `name:${String(item?.item_name||'').trim().toLowerCase()}`;
+}
+function periodCompareTopItems(previous,current){
+  const map=new Map();
+  (previous?.top_items||[]).slice(0,50).forEach((item,index)=>map.set(periodItemIdentity(item),{identity:periodItemIdentity(item),name:item.item_name,ref:item.item_ref,previous:item,current:null,previous_rank:index+1,current_rank:null}));
+  (current?.top_items||[]).slice(0,50).forEach((item,index)=>{
+    const key=periodItemIdentity(item),row=map.get(key)||{identity:key,name:item.item_name,ref:item.item_ref,previous:null,current:null,previous_rank:null,current_rank:null};
+    row.current=item;row.current_rank=index+1;row.name=item.item_name||row.name;row.ref=item.item_ref||row.ref;map.set(key,row);
+  });
+  return [...map.values()].map(row=>{
+    if(row.previous_rank&&row.current_rank){
+      const delta=row.previous_rank-row.current_rank;
+      row.status=delta>0?`صاعد +${delta}`:delta<0?`هابط ${delta}`:'ثابت';
+      row.status_order=delta>0?1:delta<0?3:2;row.rank_delta=delta;
+    }else if(row.current_rank){row.status='جديد في Top 50';row.status_order=0;row.rank_delta=999;}
+    else{row.status='خرج من Top 50';row.status_order=4;row.rank_delta=-999;}
+    return row;
+  }).sort((a,b)=>a.status_order-b.status_order||(b.rank_delta-a.rank_delta)||(a.current_rank||999)-(b.current_rank||999)||(a.previous_rank||999)-(b.previous_rank||999));
+}
+function renderPeriodItemsTable(rows){
+  if(!rows.length)return '<div class="empty">لا توجد أصناف للمقارنة.</div>';
+  const visible=state.periodCompareItemsExpanded?rows:rows.slice(0,20);
+  return `<div class="table-wrap desktop-table"><table class="period-items-table"><thead><tr><th>الصنف</th><th>ترتيب سابق</th><th>ترتيب جديد</th><th>الحركة</th><th>فواتير سابق</th><th>فواتير جديد</th><th>قيمة سابق</th><th>قيمة جديد</th></tr></thead><tbody>${visible.map(r=>`<tr><td class="name"><strong>${esc(r.name)}</strong>${r.ref?`<small>${esc(r.ref)}</small>`:''}</td><td>${r.previous_rank||'—'}</td><td>${r.current_rank||'—'}</td><td><span class="period-item-status status-${r.status_order}">${esc(r.status)}</span></td><td>${r.previous?Number(r.previous.invoice_count||0).toLocaleString('en-US'):'—'}</td><td>${r.current?Number(r.current.invoice_count||0).toLocaleString('en-US'):'—'}</td><td class="money">${r.previous?money(r.previous.sales_value):'—'}</td><td class="money">${r.current?money(r.current.sales_value):'—'}</td></tr>`).join('')}</tbody></table></div>${rows.length>20?`<button class="btn btn-soft period-items-toggle" id="periodItemsToggle">${state.periodCompareItemsExpanded?'إخفاء وعرض أول 20':`إظهار الكل (${rows.length})`}</button>`:''}`;
+}
+function renderPeriodDoctorDetail(main,key){
+  const previousData=state.periodComparePrevious,currentData=state.periodCompareCurrent,previous=periodCompareDoctorByKey(previousData,key),current=periodCompareDoctorByKey(currentData,key),name=current?.doctor||previous?.doctor||'الدكتور';
+  const row=periodCompareDoctorRows().find(x=>x.doctor_key===key)||{previous,current,doctor:name,improvement_score:null};
+  const topItems=periodCompareTopItems(previous,current);
+  main.innerHTML=`<div class="page-head period-doctor-detail-head"><div><button class="btn btn-soft btn-sm" id="periodDoctorBack">← رجوع لمقارنة الفترات</button><h2>${esc(name)}</h2><div class="muted">${esc(periodComparePeriodLabel(previousData))} مقابل ${esc(periodComparePeriodLabel(currentData))}</div></div><div class="page-head-actions"><button class="btn btn-primary btn-sm" id="periodDoctorPdf">🧾 تصدير PDF</button></div></div>
+  <div class="period-detail-score"><span>مؤشر التحسن الإجمالي</span><strong class="${Number(row.improvement_score)>=0?'period-positive':'period-negative'}">${row.improvement_score===null?'—':`${row.improvement_score>=0?'+':''}${row.improvement_score.toFixed(1)}%`}</strong><small>متوسط تغير 4 مؤشرات إنتاجية؛ لا يعتمد على إجمالي المبيعات وحده.</small></div>
+  <section class="panel"><div class="section-head"><div><h3>المؤشرات بالتفصيل</h3><div class="muted">السابقة مقابل الجديدة والفرق بينهما.</div></div></div><div class="table-wrap"><table class="period-detail-metrics"><thead><tr><th>المؤشر</th><th>الفترة السابقة</th><th>الفترة الجديدة</th><th>التغير</th></tr></thead><tbody>${DOCTOR_COMPARE_METRICS.map(m=>periodCompareMetricChangeCell(previous,current,m)).join('')}</tbody></table></div></section>
+  <section class="panel period-items-panel"><div class="section-head"><div><h3>تغير Top 50 للأصناف</h3><div class="muted">نعرض الأصناف الجديدة، الصاعدة، الهابطة، والثابتة أو التي خرجت من Top 50.</div></div></div><div id="periodItemsComparison">${renderPeriodItemsTable(topItems)}</div></section>`;
+  document.getElementById('periodDoctorBack').onclick=()=>{state.periodCompareSelectedDoctor='';state.periodCompareItemsExpanded=false;doctorPeriodComparisonView(main);};
+  document.getElementById('periodDoctorPdf').onclick=()=>exportPeriodDoctorPdf(row);
+  const toggle=document.getElementById('periodItemsToggle');if(toggle)toggle.onclick=()=>{state.periodCompareItemsExpanded=!state.periodCompareItemsExpanded;document.getElementById('periodItemsComparison').innerHTML=renderPeriodItemsTable(topItems);const again=document.getElementById('periodItemsToggle');if(again)again.onclick=()=>{state.periodCompareItemsExpanded=!state.periodCompareItemsExpanded;renderPeriodDoctorDetail(main,key);};};
+}
+function exportPeriodComparisonPdf(){
+  const previous=state.periodComparePrevious,current=state.periodCompareCurrent;if(!previous||!current){toast('ارفع التقريرين أولًا.',true);return;}
+  const rows=periodCompareSortedDoctorRows();
+  const overall=PERIOD_COMPARE_OVERALL_METRICS.map(m=>{const p=periodCompareOverallValue(previous,m.key),c=periodCompareOverallValue(current,m.key);return `<tr><td class="name">${esc(m.label)}</td><td>${doctorCompareFormat(p,m.format)}</td><td>${doctorCompareFormat(c,m.format)}</td><td>${esc(periodCompareChangeText(p,c,{points:!!m.points}))}</td></tr>`;}).join('');
+  const doctors=rows.map((r,i)=>`<tr><td>${i+1}</td><td class="name">${esc(r.doctor)}</td><td>${esc(r.status)}</td><td class="money">${r.previous?money(r.previous.net_sales):'—'}</td><td class="money">${r.current?money(r.current.net_sales):'—'}</td><td>${r.previous&&r.current?periodCompareChangeText(r.previous.daily_average,r.current.daily_average):'—'}</td><td>${r.previous&&r.current?periodCompareChangeText(r.previous.average_invoice,r.current.average_invoice):'—'}</td><td>${r.previous&&r.current?periodCompareChangeText(r.previous.invoices_per_active_day,r.current.invoices_per_active_day):'—'}</td><td>${r.improvement_score===null?'—':`${r.improvement_score>=0?'+':''}${r.improvement_score.toFixed(1)}%`}</td></tr>`).join('');
+  const body=`<section class="section"><h2 class="section-title">مقارنة الصيدلية ككل</h2><table><thead><tr><th>المؤشر</th><th>الفترة السابقة</th><th>الفترة الجديدة</th><th>التغير</th></tr></thead><tbody>${overall}</tbody></table><div class="note-box">مؤشر التحسن الإجمالي للدكتور = متوسط تغير المبيعات/يوم، فواتير/يوم، متوسط الفاتورة وMedian. مبيعات الآجل مستبعدة من الفترتين.</div></section><section class="section page-break"><h2 class="section-title">مقارنة كل الدكاترة</h2><table><thead><tr><th>#</th><th>الدكتور</th><th>الحالة</th><th>صافي سابق</th><th>صافي جديد</th><th>Δ مبيعات/يوم</th><th>Δ متوسط فاتورة</th><th>Δ فواتير/يوم</th><th>مؤشر التحسن</th></tr></thead><tbody>${doctors}</tbody></table></section>`;
+  openDoctorPdfPrintWindow({title:'مقارنة فترات مبيعات الدكاترة',subtitle:`السابقة: ${esc(periodComparePeriodLabel(previous))} | الجديدة: ${esc(periodComparePeriodLabel(current))}`,body,orientation:'landscape'});
+}
+function exportPeriodDoctorPdf(row){
+  if(!row)return;const previous=row.previous,current=row.current,name=row.doctor||current?.doctor||previous?.doctor||'الدكتور',items=periodCompareTopItems(previous,current);
+  const metricRows=DOCTOR_COMPARE_METRICS.map(m=>{const p=previous?doctorCompareNumber(previous,m.key):null,c=current?doctorCompareNumber(current,m.key):null,points=m.key==='high_value_invoice_percentage'||m.key==='stability_score';return `<tr><td class="name">${esc(m.label)}</td><td>${doctorCompareFormat(p,m.format)}</td><td>${doctorCompareFormat(c,m.format)}</td><td>${esc(periodCompareChangeText(p,c,{points}))}</td></tr>`;}).join('');
+  const itemRows=items.map((r,i)=>`<tr><td>${i+1}</td><td class="name">${esc(r.name)}</td><td>${r.previous_rank||'—'}</td><td>${r.current_rank||'—'}</td><td>${esc(r.status)}</td><td>${r.previous?doctorPdfNum(r.previous.invoice_count):'—'}</td><td>${r.current?doctorPdfNum(r.current.invoice_count):'—'}</td><td class="money">${r.previous?money(r.previous.sales_value):'—'}</td><td class="money">${r.current?money(r.current.sales_value):'—'}</td></tr>`).join('');
+  const body=`<section class="section"><div class="cards"><div class="card"><div class="label">مؤشر التحسن الإجمالي</div><div class="value">${row.improvement_score===null?'—':`${row.improvement_score>=0?'+':''}${row.improvement_score.toFixed(1)}%`}</div></div><div class="card"><div class="label">صافي الفترة السابقة</div><div class="value">${previous?money(previous.net_sales):'—'}</div></div><div class="card"><div class="label">صافي الفترة الجديدة</div><div class="value">${current?money(current.net_sales):'—'}</div></div><div class="card"><div class="label">الحالة</div><div class="value">${esc(row.status)}</div></div></div><h2 class="section-title">المؤشرات بالتفصيل</h2><table><thead><tr><th>المؤشر</th><th>السابقة</th><th>الجديدة</th><th>التغير</th></tr></thead><tbody>${metricRows}</tbody></table></section><section class="section page-break"><h2 class="section-title">تغير Top 50 للأصناف</h2><table><thead><tr><th>#</th><th>الصنف</th><th>ترتيب سابق</th><th>ترتيب جديد</th><th>الحركة</th><th>فواتير سابق</th><th>فواتير جديد</th><th>قيمة سابق</th><th>قيمة جديد</th></tr></thead><tbody>${itemRows}</tbody></table></section>`;
+  openDoctorPdfPrintWindow({title:`مقارنة فترات - ${name}`,subtitle:`السابقة: ${esc(periodComparePeriodLabel(state.periodComparePrevious))} | الجديدة: ${esc(periodComparePeriodLabel(state.periodCompareCurrent))}`,body,orientation:'landscape'});
 }
 
 async function dashboardView(main){

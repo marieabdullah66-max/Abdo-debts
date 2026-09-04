@@ -371,6 +371,15 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
         for bucket in doctors.values()
         for date in bucket["active_days"]
     })
+    all_invoice_values = [float(invoice["net_total"]) for invoice in invoices.values()]
+    total_median_invoice = round(float(median(all_invoice_values)), 3) if all_invoice_values else 0.0
+    total_high_value_invoice_count = sum(1 for value in all_invoice_values if value > 100)
+    total_high_value_invoice_percentage = round(
+        (total_high_value_invoice_count / total_invoices) * 100, 2
+    ) if total_invoices else 0.0
+    total_net_sales = round(total_sales - total_returns, 3)
+    total_daily_average = round(total_net_sales / total_active_days, 3) if total_active_days else 0.0
+    total_invoices_per_active_day = round(total_invoices / total_active_days, 2) if total_active_days else 0.0
 
     return {
         "source": source,
@@ -385,9 +394,14 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
         "totals": {
             "sales_total": total_sales,
             "returns_total": total_returns,
-            "net_sales": round(total_sales - total_returns, 3),
+            "net_sales": total_net_sales,
             "invoice_count": total_invoices,
             "average_invoice": round(total_sales / total_invoices, 3) if total_invoices else 0.0,
+            "median_invoice": total_median_invoice,
+            "daily_average": total_daily_average,
+            "invoices_per_active_day": total_invoices_per_active_day,
+            "high_value_invoice_count": total_high_value_invoice_count,
+            "high_value_invoice_percentage": total_high_value_invoice_percentage,
             "unique_items": len(global_items),
             "active_days": total_active_days,
         },
