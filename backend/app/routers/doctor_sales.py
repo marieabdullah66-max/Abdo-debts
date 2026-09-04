@@ -21,6 +21,127 @@ RETURN_WORD = "مردود"
 CASH_WORD = "نقد"
 CREDIT_WORD = "الآجل"
 
+# V32 KPI weights. Scores are relative to peers inside the same report.
+KPI_WEIGHTS = {
+    "daily_average": 25.0,
+    "invoices_per_active_day": 15.0,
+    "average_invoice": 15.0,
+    "median_invoice": 10.0,
+    "average_items_per_invoice": 10.0,
+    "high_value_invoice_percentage": 10.0,
+    "stability_score": 10.0,
+    "diversity_rate": 5.0,
+}
+
+
+def _peer_score(value: Any, peer_values: list[float]) -> float | None:
+    if value is None:
+        return None
+    try:
+        numeric = max(0.0, float(value))
+    except (TypeError, ValueError):
+        return None
+    maximum = max((max(0.0, float(item)) for item in peer_values), default=0.0)
+    if maximum <= 0:
+        return 0.0
+    return round(min(100.0, (numeric / maximum) * 100.0), 1)
+
+
+def _weighted_kpi(scores: dict[str, float | None], keys: list[str]) -> float | None:
+    weighted = 0.0
+    used_weight = 0.0
+    for key in keys:
+        score = scores.get(key)
+        if score is None:
+            continue
+        weight = KPI_WEIGHTS[key]
+        weighted += score * weight
+        used_weight += weight
+    if used_weight <= 0:
+        return None
+    return round(weighted / used_weight, 1)
+
+
+def _kpi_label(score: float | None) -> str:
+    if score is None:
+        return "بيانات غير كافية"
+    if score >= 90:
+        return "ممتاز"
+    if score >= 80:
+        return "قوي"
+    if score >= 70:
+        return "جيد"
+    if score >= 60:
+        return "متوسط"
+    return "يحتاج متابعة"
+
+
+def _apply_doctor_kpis(result_doctors: list[dict[str, Any]]) -> None:
+    if not result_doctors:
+        return
+
+    # Diversity is normalized for workload: unique products per 100 cash invoices.
+    for doctor in result_doctors:
+        invoice_count = int(doctor.get("invoice_count") or 0)
+        doctor["diversity_rate"] = round(
+            (float(doctor.get("unique_items") or 0) / invoice_count) * 100.0, 2
+        ) if invoice_count else 0.0
+
+    metric_peers: dict[str, list[float]] = {}
+    for key in KPI_WEIGHTS:
+        values: list[float] = []
+        for doctor in result_doctors:
+            value = doctor.get(key)
+            if value is None:
+                continue
+            try:
+                values.append(max(0.0, float(value)))
+            except (TypeError, ValueError):
+                continue
+        metric_peers[key] = values
+
+    productivity_keys = ["daily_average", "invoices_per_active_day"]
+    basket_keys = [
+        "average_invoice", "median_invoice", "average_items_per_invoice",
+        "high_value_invoice_percentage", "diversity_rate",
+    ]
+    all_keys = list(KPI_WEIGHTS)
+
+    for doctor in result_doctors:
+        component_scores = {
+            key: _peer_score(doctor.get(key), metric_peers[key])
+            for key in KPI_WEIGHTS
+        }
+        productivity = _weighted_kpi(component_scores, productivity_keys)
+        basket_quality = _weighted_kpi(component_scores, basket_keys)
+        consistency = component_scores.get("stability_score")
+        overall = _weighted_kpi(component_scores, all_keys)
+
+        doctor["kpi_score"] = overall
+        doctor["productivity_kpi"] = productivity
+        doctor["basket_quality_kpi"] = basket_quality
+        doctor["consistency_kpi"] = consistency
+        doctor["kpi_components"] = component_scores
+
+    # Make each composite KPI intuitive: the best composite performer in the
+    # report anchors the scale at 100, while preserving proportional gaps.
+    for field in ("kpi_score", "productivity_kpi", "basket_quality_kpi", "consistency_kpi"):
+        available = [
+            float(doctor[field]) for doctor in result_doctors
+            if doctor.get(field) is not None
+        ]
+        maximum = max(available, default=0.0)
+        if maximum <= 0:
+            continue
+        for doctor in result_doctors:
+            value = doctor.get(field)
+            if value is None:
+                continue
+            doctor[field] = round(min(100.0, (float(value) / maximum) * 100.0), 1)
+
+    for doctor in result_doctors:
+        doctor["kpi_label"] = _kpi_label(doctor.get("kpi_score"))
+
 
 def _text(value: Any) -> str:
     if value is None:
@@ -361,6 +482,7 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
             "invoices": doctor_invoices,
         })
 
+    _apply_doctor_kpis(result_doctors)
     result_doctors.sort(key=lambda item: (item["net_sales"], item["sales_total"]), reverse=True)
 
     total_sales = round(sum(item["sales_total"] for item in result_doctors), 3)
@@ -404,6 +526,16 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
             "high_value_invoice_percentage": total_high_value_invoice_percentage,
             "unique_items": len(global_items),
             "active_days": total_active_days,
+            "kpi_average": round(
+                sum(float(item["kpi_score"]) for item in result_doctors if item.get("kpi_score") is not None)
+                / max(1, sum(1 for item in result_doctors if item.get("kpi_score") is not None)),
+                1,
+            ),
+        },
+        "kpi_method": {
+            "basis": "peer_relative",
+            "weights": KPI_WEIGHTS,
+            "note": "KPI نسبي داخل نفس التقرير؛ كل مؤشر يقاس مقارنة بأفضل أداء داخل الفريق.",
         },
         "doctors": result_doctors,
     }
