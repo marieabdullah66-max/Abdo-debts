@@ -6,8 +6,9 @@ import unicodedata
 from collections import defaultdict
 from statistics import median, pstdev
 from typing import Any
+from datetime import datetime, date
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from ..core import current_profile, require_permission
 
@@ -226,13 +227,55 @@ def _date_only(value: str) -> str:
     return text.split()[0]
 
 
+def _parse_report_date(value: str) -> date | None:
+    text = _date_only(value)
+    if not text:
+        return None
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _date_iso(value: date | None) -> str:
+    return value.isoformat() if value else ""
+
+
+def _date_display(value: date | None) -> str:
+    return value.strftime("%d/%m/%Y") if value else ""
+
+
 def _item_identity(item_name: str, item_ref: str) -> str:
     normalized_item = _normalize(item_name)
     return f"ref:{item_ref}" if item_ref and item_ref != "0" else f"name:{normalized_item}"
 
 
-def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
-    period_start, period_end, source = _period_and_source(rows)
+def analyze_doctor_sales_rows(
+    rows: list[list[str]],
+    filter_start: str = "",
+    filter_end: str = "",
+) -> dict[str, Any]:
+    report_period_start, report_period_end, source = _period_and_source(rows)
+    report_start_date = _parse_report_date(report_period_start)
+    report_end_date = _parse_report_date(report_period_end)
+    selected_start = _parse_report_date(filter_start) if filter_start else None
+    selected_end = _parse_report_date(filter_end) if filter_end else None
+
+    if filter_start and selected_start is None:
+        raise HTTPException(422, "تاريخ بداية الفترة غير صالح")
+    if filter_end and selected_end is None:
+        raise HTTPException(422, "تاريخ نهاية الفترة غير صالح")
+    if selected_start and selected_end and selected_start > selected_end:
+        raise HTTPException(422, "تاريخ البداية يجب أن يكون قبل أو مساويًا لتاريخ النهاية")
+    if report_start_date and selected_start and selected_start < report_start_date:
+        raise HTTPException(422, "تاريخ البداية خارج فترة التقرير")
+    if report_end_date and selected_end and selected_end > report_end_date:
+        raise HTTPException(422, "تاريخ النهاية خارج فترة التقرير")
+
+    period_start = _date_display(selected_start) if selected_start else report_period_start
+    period_end = _date_display(selected_end) if selected_end else report_period_end
 
     doctors: dict[str, dict[str, Any]] = {}
     invoices: dict[tuple[str, str], dict[str, Any]] = {}
@@ -249,6 +292,15 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
         movement_type = _label_value(row, ": نوع الحركة")
         if not movement_type:
             continue
+
+        if selected_start or selected_end:
+            row_date = _parse_report_date(_label_value(row, ": تاريخ الحركة"))
+            if row_date is None:
+                continue
+            if selected_start and row_date < selected_start:
+                continue
+            if selected_end and row_date > selected_end:
+                continue
 
         is_return = RETURN_WORD in movement_type
         is_sale = movement_type.startswith(SALE_PREFIX) and not is_return
@@ -507,6 +559,13 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
         "source": source,
         "period_start": period_start,
         "period_end": period_end,
+        "report_period_start": report_period_start,
+        "report_period_end": report_period_end,
+        "available_start_iso": _date_iso(report_start_date),
+        "available_end_iso": _date_iso(report_end_date),
+        "filter_start_iso": _date_iso(selected_start),
+        "filter_end_iso": _date_iso(selected_end),
+        "is_filtered": bool(selected_start or selected_end),
         "sales_scope": "cash_only",
         "doctor_count": len(result_doctors),
         "processed_rows": processed_rows,
@@ -544,6 +603,8 @@ def analyze_doctor_sales_rows(rows: list[list[str]]) -> dict[str, Any]:
 @router.post("/analyze")
 async def analyze_doctor_sales(
     file: UploadFile = File(...),
+    date_from: str = Form(""),
+    date_to: str = Form(""),
     profile: dict[str, Any] = Depends(current_profile),
 ) -> dict[str, Any]:
     require_permission(profile, "view_doctor_sales")
@@ -565,4 +626,4 @@ async def analyze_doctor_sales(
             break
         rows.append(row)
 
-    return analyze_doctor_sales_rows(rows)
+    return analyze_doctor_sales_rows(rows, date_from, date_to)

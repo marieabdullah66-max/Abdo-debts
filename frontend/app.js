@@ -22,8 +22,10 @@ const state = {
   itemCatalogRequestSeq: 0,
   movementReports: [], movementRows: [], movementReport: null, movementReportId: '', movementBranchId: '', movementSearch: '', movementStatus: 'all', movementSort: 'desc',
   doctorSalesAnalysis: null, doctorSalesSearch: '', doctorSalesSort: 'net_desc', doctorSalesFileName: '', doctorSalesSelectedDoctor: '',
+  doctorSalesFile: null, doctorSalesDateFrom: '', doctorSalesDateTo: '',
   doctorCompareSortKey: 'net_sales', doctorCompareSortDir: 'desc', doctorCompareA: '', doctorCompareB: '',
   periodComparePrevious: null, periodCompareCurrent: null, periodComparePreviousFileName: '', periodCompareCurrentFileName: '',
+  periodComparePreviousFile: null, periodCompareCurrentFile: null, periodComparePreviousDateFrom: '', periodComparePreviousDateTo: '', periodCompareCurrentDateFrom: '', periodCompareCurrentDateTo: '',
   periodCompareSortKey: 'improvement_score', periodCompareSortDir: 'desc', periodCompareSelectedDoctor: '', periodCompareItemsExpanded: false,
   paymentPlanBranchId: '',
   paymentPlanStatus: 'open',
@@ -292,6 +294,17 @@ function doctorSalesSelected(){
   const rows=state.doctorSalesAnalysis?.doctors||[];
   return rows.find(x=>String(x.doctor_key||'')===String(state.doctorSalesSelectedDoctor||''))||null;
 }
+async function analyzeDoctorSalesFile(file,dateFrom='',dateTo=''){
+  if(!file)throw new Error('ارفع تقرير المبيعات أولًا.');
+  const body=new FormData();body.append('file',file);
+  if(dateFrom)body.append('date_from',dateFrom);
+  if(dateTo)body.append('date_to',dateTo);
+  return api('/api/doctor-sales/analyze',{method:'POST',body});
+}
+function doctorSalesFullPeriodText(data){
+  if(!data)return '—';
+  return `${data.report_period_start||data.period_start||'—'} ← ${data.report_period_end||data.period_end||'—'}`;
+}
 async function doctorSalesView(main){
   const selected=doctorSalesSelected();
   if(selected){renderDoctorSalesDetail(main,selected);return;}
@@ -306,9 +319,9 @@ async function doctorSalesView(main){
     const file=fileInput.files?.[0];if(!file)return;
     uploadBtn.disabled=true;uploadBtn.textContent='جاري تحليل التقرير...';
     try{
-      const body=new FormData();body.append('file',file);
-      const data=await api('/api/doctor-sales/analyze',{method:'POST',body});
-      state.doctorSalesAnalysis=data;state.doctorSalesFileName=file.name;state.doctorSalesSearch='';state.doctorSalesSort='net_desc';state.doctorSalesSelectedDoctor='';
+      const data=await analyzeDoctorSalesFile(file);
+      state.doctorSalesAnalysis=data;state.doctorSalesFile=file;state.doctorSalesFileName=file.name;state.doctorSalesSearch='';state.doctorSalesSort='net_desc';state.doctorSalesSelectedDoctor='';
+      state.doctorSalesDateFrom=data.available_start_iso||'';state.doctorSalesDateTo=data.available_end_iso||'';
       toast('تم تحليل المبيعات النقدية للدكاترة');renderDoctorSalesResults();
     }catch(e){toast(e.message,true);}finally{uploadBtn.disabled=false;uploadBtn.textContent='رفع تقرير مبيعات';fileInput.value='';}
   };
@@ -317,7 +330,8 @@ async function doctorSalesView(main){
 function renderDoctorSalesResults(){
   const box=document.getElementById('doctorSalesResults'),data=state.doctorSalesAnalysis;if(!box||!data)return;
   const t=data.totals||{};
-  box.innerHTML=`<section class="panel doctor-sales-report-info"><div><strong>${esc(data.source||'تقرير المبيعات')}</strong><span>${esc(data.period_start||'—')} ← ${esc(data.period_end||'—')}</span>${state.doctorSalesFileName?`<small>${esc(state.doctorSalesFileName)}</small>`:''}</div><div class="doctor-sales-report-badges"><span class="badge badge-green">${Number(data.doctor_count||0).toLocaleString('en-US')} دكتور/مستخدم</span><span class="badge">نقدي فقط</span><button class="btn btn-soft btn-sm" id="doctorSalesPdfExport">🧾 تصدير التحليل PDF</button></div></section>
+  box.innerHTML=`<section class="panel doctor-sales-report-info"><div><strong>${esc(data.source||'تقرير المبيعات')}</strong><span>${esc(data.period_start||'—')} ← ${esc(data.period_end||'—')}</span>${data.is_filtered?`<span class="badge badge-amber">فترة مخصصة</span>`:''}${state.doctorSalesFileName?`<small>${esc(state.doctorSalesFileName)}</small>`:''}</div><div class="doctor-sales-report-badges"><span class="badge badge-green">${Number(data.doctor_count||0).toLocaleString('en-US')} دكتور/مستخدم</span><span class="badge">نقدي فقط</span><button class="btn btn-soft btn-sm" id="doctorSalesPdfExport">🧾 تصدير التحليل PDF</button></div></section>
+  <section class="panel doctor-sales-period-filter"><div class="doctor-period-filter-head"><div><strong>تحديد فترة داخل التقرير</strong><span>الفترة الكاملة المتاحة: ${esc(doctorSalesFullPeriodText(data))}</span></div>${data.is_filtered?'<span class="badge badge-amber">الفلتر مطبق</span>':'<span class="badge badge-green">التقرير كامل</span>'}</div><div class="doctor-period-filter-controls"><label><span>من تاريخ</span><input class="input" type="date" id="doctorSalesDateFrom" min="${esc(data.available_start_iso||'')}" max="${esc(data.available_end_iso||'')}" value="${esc(state.doctorSalesDateFrom||data.available_start_iso||'')}"></label><label><span>إلى تاريخ</span><input class="input" type="date" id="doctorSalesDateTo" min="${esc(data.available_start_iso||'')}" max="${esc(data.available_end_iso||'')}" value="${esc(state.doctorSalesDateTo||data.available_end_iso||'')}"></label><button class="btn btn-primary" id="doctorSalesApplyPeriod">تطبيق الفترة</button><button class="btn btn-soft" id="doctorSalesResetPeriod" ${data.is_filtered?'':'disabled'}>عرض التقرير كامل</button></div></section>
   <div class="doctor-sales-summary">
     <div class="stat"><div class="label">صافي المبيعات النقدية</div><div class="value">${money(t.net_sales)}</div></div>
     <div class="stat"><div class="label">إجمالي المبيعات النقدية</div><div class="value">${money(t.sales_total)}</div></div>
@@ -333,6 +347,28 @@ function renderDoctorSalesResults(){
   search.oninput=()=>{state.doctorSalesSearch=search.value;renderDoctorSalesTable();};
   sort.onchange=()=>{state.doctorSalesSort=sort.value;renderDoctorSalesTable();};
   if(pdfBtn)pdfBtn.onclick=()=>exportDoctorSalesAnalysisPdf();
+  const dateFrom=document.getElementById('doctorSalesDateFrom'),dateTo=document.getElementById('doctorSalesDateTo'),applyPeriod=document.getElementById('doctorSalesApplyPeriod'),resetPeriod=document.getElementById('doctorSalesResetPeriod');
+  if(applyPeriod)applyPeriod.onclick=async()=>{
+    const from=dateFrom?.value||'',to=dateTo?.value||'';
+    if(!from||!to){toast('حدد تاريخ البداية والنهاية.',true);return;}
+    if(from>to){toast('تاريخ البداية يجب أن يكون قبل تاريخ النهاية.',true);return;}
+    if(!state.doctorSalesFile){toast('أعد رفع تقرير المبيعات حتى نقدر نطبق الفترة.',true);return;}
+    applyPeriod.disabled=true;applyPeriod.textContent='جاري تطبيق الفترة...';
+    try{
+      const filtered=await analyzeDoctorSalesFile(state.doctorSalesFile,from,to);
+      state.doctorSalesAnalysis=filtered;state.doctorSalesDateFrom=from;state.doctorSalesDateTo=to;state.doctorSalesSelectedDoctor='';
+      toast(`تم تحليل الفترة ${filtered.period_start||''} إلى ${filtered.period_end||''}`);renderDoctorSalesResults();
+    }catch(e){toast(e.message,true);applyPeriod.disabled=false;applyPeriod.textContent='تطبيق الفترة';}
+  };
+  if(resetPeriod)resetPeriod.onclick=async()=>{
+    if(!state.doctorSalesFile){toast('أعد رفع تقرير المبيعات حتى نقدر نعرض التقرير كامل.',true);return;}
+    resetPeriod.disabled=true;resetPeriod.textContent='جاري التحميل...';
+    try{
+      const full=await analyzeDoctorSalesFile(state.doctorSalesFile);
+      state.doctorSalesAnalysis=full;state.doctorSalesDateFrom=full.available_start_iso||'';state.doctorSalesDateTo=full.available_end_iso||'';state.doctorSalesSelectedDoctor='';
+      toast('تم الرجوع إلى الفترة الكاملة للتقرير');renderDoctorSalesResults();
+    }catch(e){toast(e.message,true);resetPeriod.disabled=false;resetPeriod.textContent='عرض التقرير كامل';}
+  };
   renderDoctorSalesTable();
 }
 function bindDoctorSalesDetailButtons(){
@@ -733,20 +769,21 @@ function periodCompareDoctorStatusBadge(row){
 function periodCompareReportCard(slot,title,data,fileName){
   const id=slot==='previous'?'PeriodComparePrevious':'PeriodCompareCurrent';
   const currentAvailable=!!state.doctorSalesAnalysis;
+  const dateFrom=slot==='previous'?state.periodComparePreviousDateFrom:state.periodCompareCurrentDateFrom;
+  const dateTo=slot==='previous'?state.periodComparePreviousDateTo:state.periodCompareCurrentDateTo;
   return `<section class="panel period-upload-card ${data?'loaded':''}">
     <div class="period-upload-head"><div><span class="period-step">${slot==='previous'?'1':'2'}</span><h3>${esc(title)}</h3></div>${data?'<span class="badge badge-green">جاهز</span>':'<span class="badge">مطلوب</span>'}</div>
-    ${data?`<div class="period-upload-info"><strong>${esc(periodComparePeriodLabel(data))}</strong><span>${Number(data.doctor_count||0).toLocaleString('en-US')} دكتور · ${Number(data.totals?.invoice_count||0).toLocaleString('en-US')} فاتورة نقدية</span>${fileName?`<small>${esc(fileName)}</small>`:''}</div>`:'<div class="muted period-upload-empty">ارفع تقرير المبيعات CSV لهذه الفترة.</div>'}
+    ${data?`<div class="period-upload-info"><strong>${esc(periodComparePeriodLabel(data))}</strong><span>${Number(data.doctor_count||0).toLocaleString('en-US')} دكتور · ${Number(data.totals?.invoice_count||0).toLocaleString('en-US')} فاتورة نقدية</span><small>الفترة الكاملة: ${esc(doctorSalesFullPeriodText(data))}</small>${fileName?`<small>${esc(fileName)}</small>`:''}</div><div class="period-card-date-filter"><label><span>من</span><input class="input" type="date" id="dateFrom${id}" min="${esc(data.available_start_iso||'')}" max="${esc(data.available_end_iso||'')}" value="${esc(dateFrom||data.available_start_iso||'')}"></label><label><span>إلى</span><input class="input" type="date" id="dateTo${id}" min="${esc(data.available_start_iso||'')}" max="${esc(data.available_end_iso||'')}" value="${esc(dateTo||data.available_end_iso||'')}"></label><button class="btn btn-soft btn-sm" id="applyDate${id}">تطبيق الفترة</button></div>`:'<div class="muted period-upload-empty">ارفع تقرير المبيعات CSV لهذه الفترة.</div>'}
     <div class="period-upload-actions"><button class="btn ${data?'btn-soft':'btn-primary'}" id="upload${id}">${data?'تغيير التقرير':'رفع التقرير'}</button>${currentAvailable?`<button class="btn btn-ghost" id="useCurrent${id}">استخدام التقرير المحمّل</button>`:''}<input id="file${id}" type="file" accept=".csv,text/csv" hidden></div>
   </section>`;
 }
-async function periodCompareAnalyzeFile(file,slot){
+async function periodCompareAnalyzeFile(file,slot,dateFrom='',dateTo=''){
   if(!file)return;
-  const body=new FormData();body.append('file',file);
   toast(`جاري تحليل ${slot==='previous'?'الفترة السابقة':'الفترة الجديدة'}...`);
   try{
-    const data=await api('/api/doctor-sales/analyze',{method:'POST',body});
-    if(slot==='previous'){state.periodComparePrevious=data;state.periodComparePreviousFileName=file.name;}
-    else{state.periodCompareCurrent=data;state.periodCompareCurrentFileName=file.name;}
+    const data=await analyzeDoctorSalesFile(file,dateFrom,dateTo);
+    if(slot==='previous'){state.periodComparePrevious=data;state.periodComparePreviousFileName=file.name;state.periodComparePreviousFile=file;state.periodComparePreviousDateFrom=dateFrom||data.available_start_iso||'';state.periodComparePreviousDateTo=dateTo||data.available_end_iso||'';}
+    else{state.periodCompareCurrent=data;state.periodCompareCurrentFileName=file.name;state.periodCompareCurrentFile=file;state.periodCompareCurrentDateFrom=dateFrom||data.available_start_iso||'';state.periodCompareCurrentDateTo=dateTo||data.available_end_iso||'';}
     state.periodCompareSelectedDoctor='';state.periodCompareItemsExpanded=false;
     await doctorPeriodComparisonView(document.getElementById('main'));
     toast('تم تحليل التقرير وإضافته للمقارنة');
@@ -766,18 +803,29 @@ async function doctorPeriodComparisonView(main){
   <div id="periodCompareResults">${both?'<div class="loading">جاري تجهيز المقارنة...</div>':'<section class="panel"><div class="empty">ارفع التقريرين حتى تظهر المقارنة.</div></section>'}</div>`;
   document.getElementById('periodCompareBack').onclick=()=>go('doctorsales');
   for(const slot of ['Previous','Current']){
-    const lower=slot==='Previous'?'previous':'current',upload=document.getElementById(`uploadPeriodCompare${slot}`),input=document.getElementById(`filePeriodCompare${slot}`),use=document.getElementById(`useCurrentPeriodCompare${slot}`);
+    const lower=slot==='Previous'?'previous':'current',upload=document.getElementById(`uploadPeriodCompare${slot}`),input=document.getElementById(`filePeriodCompare${slot}`),use=document.getElementById(`useCurrentPeriodCompare${slot}`),apply=document.getElementById(`applyDatePeriodCompare${slot}`);
     if(upload&&input){upload.onclick=()=>input.click();input.onchange=()=>periodCompareAnalyzeFile(input.files?.[0],lower);}
     if(use)use.onclick=async()=>{
-      if(lower==='previous'){state.periodComparePrevious=state.doctorSalesAnalysis;state.periodComparePreviousFileName=state.doctorSalesFileName||'التقرير المحمّل';}
-      else{state.periodCompareCurrent=state.doctorSalesAnalysis;state.periodCompareCurrentFileName=state.doctorSalesFileName||'التقرير المحمّل';}
+      if(lower==='previous'){state.periodComparePrevious=state.doctorSalesAnalysis;state.periodComparePreviousFileName=state.doctorSalesFileName||'التقرير المحمّل';state.periodComparePreviousFile=state.doctorSalesFile;state.periodComparePreviousDateFrom=state.doctorSalesAnalysis?.filter_start_iso||state.doctorSalesAnalysis?.available_start_iso||'';state.periodComparePreviousDateTo=state.doctorSalesAnalysis?.filter_end_iso||state.doctorSalesAnalysis?.available_end_iso||'';}
+      else{state.periodCompareCurrent=state.doctorSalesAnalysis;state.periodCompareCurrentFileName=state.doctorSalesFileName||'التقرير المحمّل';state.periodCompareCurrentFile=state.doctorSalesFile;state.periodCompareCurrentDateFrom=state.doctorSalesAnalysis?.filter_start_iso||state.doctorSalesAnalysis?.available_start_iso||'';state.periodCompareCurrentDateTo=state.doctorSalesAnalysis?.filter_end_iso||state.doctorSalesAnalysis?.available_end_iso||'';}
       state.periodCompareSelectedDoctor='';state.periodCompareItemsExpanded=false;await doctorPeriodComparisonView(main);
+    };
+    if(apply)apply.onclick=async()=>{
+      const file=lower==='previous'?state.periodComparePreviousFile:state.periodCompareCurrentFile;
+      const from=document.getElementById(`dateFromPeriodCompare${slot}`)?.value||'',to=document.getElementById(`dateToPeriodCompare${slot}`)?.value||'';
+      if(!file){toast('أعد رفع التقرير حتى نقدر نطبق فترة مخصصة.',true);return;}
+      if(!from||!to||from>to){toast('راجع تاريخ البداية والنهاية.',true);return;}
+      apply.disabled=true;apply.textContent='جاري التطبيق...';
+      await periodCompareAnalyzeFile(file,lower,from,to);
     };
   }
   const swap=document.getElementById('periodCompareSwap');
   if(swap)swap.onclick=async()=>{
     [state.periodComparePrevious,state.periodCompareCurrent]=[state.periodCompareCurrent,state.periodComparePrevious];
     [state.periodComparePreviousFileName,state.periodCompareCurrentFileName]=[state.periodCompareCurrentFileName,state.periodComparePreviousFileName];
+    [state.periodComparePreviousFile,state.periodCompareCurrentFile]=[state.periodCompareCurrentFile,state.periodComparePreviousFile];
+    [state.periodComparePreviousDateFrom,state.periodCompareCurrentDateFrom]=[state.periodCompareCurrentDateFrom,state.periodComparePreviousDateFrom];
+    [state.periodComparePreviousDateTo,state.periodCompareCurrentDateTo]=[state.periodCompareCurrentDateTo,state.periodComparePreviousDateTo];
     state.periodCompareSelectedDoctor='';state.periodCompareItemsExpanded=false;await doctorPeriodComparisonView(main);
   };
   const pdf=document.getElementById('periodComparePdf');if(pdf)pdf.onclick=exportPeriodComparisonPdf;
