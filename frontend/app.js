@@ -24,10 +24,10 @@ const state = {
   movementReports: [], movementRows: [], movementReport: null, movementReportId: '', movementBranchId: '', movementSearch: '', movementStatus: 'all', movementSort: 'desc',
   shortagesAnalysis: null, shortagesFile: null, shortagesFileName: '', shortagesBranchId: '', shortagesTargetDays: 14, shortagesSearch: '', shortagesStatus: 'shortage', shortagesSort: 'urgency', shortagesDraft: {},
   doctorSalesAnalysis: null, doctorSalesSearch: '', doctorSalesSort: 'net_desc', doctorSalesFileName: '', doctorSalesSelectedDoctor: '',
-  doctorSalesFile: null, doctorSalesDateFrom: '', doctorSalesDateTo: '',
+  doctorSalesFile: null, doctorSalesDateFrom: '', doctorSalesDateTo: '', doctorSalesBranchId: '',
   doctorCompareSortKey: 'net_sales', doctorCompareSortDir: 'desc', doctorCompareA: '', doctorCompareB: '',
   periodComparePrevious: null, periodCompareCurrent: null, periodComparePreviousFileName: '', periodCompareCurrentFileName: '',
-  periodComparePreviousFile: null, periodCompareCurrentFile: null, periodComparePreviousDateFrom: '', periodComparePreviousDateTo: '', periodCompareCurrentDateFrom: '', periodCompareCurrentDateTo: '',
+  periodComparePreviousFile: null, periodCompareCurrentFile: null, periodComparePreviousDateFrom: '', periodComparePreviousDateTo: '', periodCompareCurrentDateFrom: '', periodCompareCurrentDateTo: '', periodCompareBranchId: '',
   periodCompareSortKey: 'improvement_score', periodCompareSortDir: 'desc', periodCompareSelectedDoctor: '', periodCompareItemsExpanded: false,
   paymentPlanBranchId: '',
   paymentPlanStatus: 'open',
@@ -304,6 +304,15 @@ async function analyzeDoctorSalesFile(file,dateFrom='',dateTo=''){
   if(dateTo)body.append('date_to',dateTo);
   return api('/api/doctor-sales/analyze',{method:'POST',body});
 }
+async function saveUnifiedMovementReport(file,branchId){
+  if(!file)throw new Error('ارفع تقرير المبيعات والحركة أولًا.');
+  if(!branchId)throw new Error('اختر الفرع حتى يتم حفظ حركة الأصناف وتحديث معدل البيع.');
+  const body=new FormData();body.append('branch_id',branchId);body.append('file',file);
+  return api('/api/item-movements/import',{method:'POST',body});
+}
+function unifiedReportBranchDefault(){
+  return state.doctorSalesBranchId||state.movementBranchId||(state.branches.length===1?String(state.branches[0].id):'');
+}
 function doctorSalesFullPeriodText(data){
   if(!data)return '—';
   return `${data.report_period_start||data.period_start||'—'} ← ${data.report_period_end||data.period_end||'—'}`;
@@ -311,25 +320,39 @@ function doctorSalesFullPeriodText(data){
 async function doctorSalesView(main){
   const selected=doctorSalesSelected();
   if(selected){renderDoctorSalesDetail(main,selected);return;}
-  main.innerHTML=`<div class="page-head doctor-sales-head"><div><h2>مبيعات الدكاترة</h2><div class="muted">تحليل أداء الدكاترة من المبيعات النقدية فقط — مبيعات الآجل مستبعدة بالكامل.</div></div><div class="page-head-actions">${state.doctorSalesAnalysis?'<button class="btn btn-soft" id="doctorCompareOpen">⚖️ مقارنة الدكاترة</button><button class="btn btn-soft" id="doctorPeriodCompareOpen">🔄 مقارنة الفترات</button>':''}<button class="btn btn-primary" id="doctorSalesUpload">رفع تقرير مبيعات</button><input id="doctorSalesFile" type="file" accept=".csv,text/csv" hidden></div></div>
-  <section class="panel doctor-sales-upload-note"><strong>طريقة الحساب</strong><span>نحسب المبيعات النقدية فقط، ونطرح المرتجعات النقدية من الصافي. أيام النشاط = الأيام التي تحتوي على فاتورة بيع نقدية، والمتوسط اليومي = صافي المبيعات ÷ أيام النشاط.</span></section>
-  <div id="doctorSalesResults">${state.doctorSalesAnalysis?'<div class="loading">جاري عرض التحليل...</div>':'<section class="panel"><div class="empty">ارفع تقرير المبيعات لعرض أداء الدكاترة.</div></section>'}</div>`;
-  const fileInput=document.getElementById('doctorSalesFile'),uploadBtn=document.getElementById('doctorSalesUpload'),compareBtn=document.getElementById('doctorCompareOpen'),periodCompareBtn=document.getElementById('doctorPeriodCompareOpen');
+  if(!state.doctorSalesBranchId)state.doctorSalesBranchId=unifiedReportBranchDefault();
+  main.innerHTML=`<div class="page-head doctor-sales-head"><div><h2>مبيعات الدكاترة</h2><div class="muted">تحليل أداء الدكاترة من المبيعات النقدية فقط — ونفس CSV يحدث حركة الأصناف ومعدلات البيع.</div></div><div class="page-head-actions">${state.doctorSalesAnalysis?'<button class="btn btn-soft" id="doctorCompareOpen">⚖️ مقارنة الدكاترة</button><button class="btn btn-soft" id="doctorPeriodCompareOpen">🔄 مقارنة الفترات</button>':''}<button class="btn btn-primary" id="doctorSalesUpload">رفع تقرير المبيعات والحركة</button><input id="doctorSalesFile" type="file" accept=".csv,text/csv" hidden></div></div>
+  <section class="panel unified-sales-panel"><div class="unified-sales-copy"><strong>تقرير CSV موحد</strong><span>ارفع نفس التقرير مرة واحدة: تحليل الدكاترة يستخدم النقدي فقط، بينما حركة الأصناف تستخدم النقدي + الآجل وتخصم المردودات لتحديث معدل بيع كل صنف.</span></div><div class="field unified-sales-branch"><label>الفرع *</label><select class="select" id="doctorSalesBranch"><option value="">— اختر الفرع —</option>${branchOptions(false,false)}</select><small class="hint">الفرع مطلوب لأن معدلات حركة الأصناف والنواقص محفوظة لكل فرع.</small></div></section>
+  <section class="panel doctor-sales-upload-note"><strong>حساب الدكاترة</strong><span>نحسب المبيعات النقدية فقط، ونطرح المرتجعات النقدية من الصافي. مبيعات الآجل لا تدخل في KPI، لكنها تدخل في حركة المخزون ومعدل بيع الصنف.</span></section>
+  <div id="doctorSalesResults">${state.doctorSalesAnalysis?'<div class="loading">جاري عرض التحليل...</div>':'<section class="panel"><div class="empty">اختر الفرع وارفع تقرير CSV لعرض أداء الدكاترة وتحديث حركة الأصناف معًا.</div></section>'}</div>`;
+  const fileInput=document.getElementById('doctorSalesFile'),uploadBtn=document.getElementById('doctorSalesUpload'),branch=document.getElementById('doctorSalesBranch'),compareBtn=document.getElementById('doctorCompareOpen'),periodCompareBtn=document.getElementById('doctorPeriodCompareOpen');
+  branch.value=state.doctorSalesBranchId||'';branch.onchange=()=>{state.doctorSalesBranchId=branch.value;state.movementBranchId=branch.value||state.movementBranchId;};
   if(compareBtn)compareBtn.onclick=()=>go('doctorcompare');
   if(periodCompareBtn)periodCompareBtn.onclick=()=>go('doctorperiodcompare');
   uploadBtn.onclick=()=>fileInput.click();
   fileInput.onchange=async()=>{
     const file=fileInput.files?.[0];if(!file)return;
-    uploadBtn.disabled=true;uploadBtn.textContent='جاري تحليل التقرير...';
+    const branchId=String(branch.value||state.doctorSalesBranchId||'');
+    if(can('manage_item_catalog')&&!branchId){toast('اختر الفرع أولًا حتى نحفظ حركة الأصناف ونحدث معدل البيع',true);fileInput.value='';return;}
+    uploadBtn.disabled=true;uploadBtn.textContent='جاري تحليل وحفظ التقرير...';
     try{
       const data=await analyzeDoctorSalesFile(file);
       state.doctorSalesAnalysis=data;state.doctorSalesFile=file;state.doctorSalesFileName=file.name;state.doctorSalesSearch='';state.doctorSalesSort='net_desc';state.doctorSalesSelectedDoctor='';
-      state.doctorSalesDateFrom=data.available_start_iso||'';state.doctorSalesDateTo=data.available_end_iso||'';
-      toast('تم تحليل المبيعات النقدية للدكاترة');renderDoctorSalesResults();
-    }catch(e){toast(e.message,true);}finally{uploadBtn.disabled=false;uploadBtn.textContent='رفع تقرير مبيعات';fileInput.value='';}
+      state.doctorSalesDateFrom=data.available_start_iso||'';state.doctorSalesDateTo=data.available_end_iso||'';state.doctorSalesBranchId=branchId;
+      let movement=null,movementError='';
+      if(can('manage_item_catalog')&&branchId){
+        try{movement=await saveUnifiedMovementReport(file,branchId);state.movementBranchId=branchId;state.movementReportId=movement.report_id||'';invalidateItemSalesRates();state.shortagesAnalysis=null;}
+        catch(e){movementError=e.message||'تعذر حفظ حركة الأصناف';}
+      }
+      renderDoctorSalesResults();
+      if(movementError)toast(`تم تحليل الدكاترة، لكن تعذر تحديث حركة الأصناف: ${movementError}`,true);
+      else if(movement)toast(`تمت معالجة التقرير مرة واحدة: ${Number(data.totals?.invoice_count||0).toLocaleString('en-US')} فاتورة نقدية للدكاترة · ${Number(movement.unique_item_count||0).toLocaleString('en-US')} صنف حدّث معدل البيع`);
+      else toast('تم تحليل المبيعات النقدية للدكاترة');
+    }catch(e){toast(e.message,true);}finally{uploadBtn.disabled=false;uploadBtn.textContent='رفع تقرير المبيعات والحركة';fileInput.value='';}
   };
   if(state.doctorSalesAnalysis)renderDoctorSalesResults();
 }
+
 function renderDoctorSalesResults(){
   const box=document.getElementById('doctorSalesResults'),data=state.doctorSalesAnalysis;if(!box||!data)return;
   const t=data.totals||{};
@@ -780,16 +803,22 @@ function periodCompareReportCard(slot,title,data,fileName){
     <div class="period-upload-actions"><button class="btn ${data?'btn-soft':'btn-primary'}" id="upload${id}">${data?'تغيير التقرير':'رفع التقرير'}</button>${currentAvailable?`<button class="btn btn-ghost" id="useCurrent${id}">استخدام التقرير المحمّل</button>`:''}<input id="file${id}" type="file" accept=".csv,text/csv" hidden></div>
   </section>`;
 }
-async function periodCompareAnalyzeFile(file,slot,dateFrom='',dateTo=''){
+async function periodCompareAnalyzeFile(file,slot,dateFrom='',dateTo='',saveMovement=false){
   if(!file)return;
+  const branchId=String(state.periodCompareBranchId||state.doctorSalesBranchId||'');
+  if(saveMovement&&can('manage_item_catalog')&&!branchId){toast('اختر الفرع أولًا حتى يتم حفظ التقرير ضمن حركة الأصناف',true);return;}
   toast(`جاري تحليل ${slot==='previous'?'الفترة السابقة':'الفترة الجديدة'}...`);
   try{
     const data=await analyzeDoctorSalesFile(file,dateFrom,dateTo);
+    let movement=null,movementError='';
+    if(saveMovement&&can('manage_item_catalog')&&branchId){try{movement=await saveUnifiedMovementReport(file,branchId);state.movementBranchId=branchId;state.movementReportId=movement.report_id||'';invalidateItemSalesRates();state.shortagesAnalysis=null;}catch(e){movementError=e.message||'تعذر حفظ حركة الأصناف';}}
     if(slot==='previous'){state.periodComparePrevious=data;state.periodComparePreviousFileName=file.name;state.periodComparePreviousFile=file;state.periodComparePreviousDateFrom=dateFrom||data.available_start_iso||'';state.periodComparePreviousDateTo=dateTo||data.available_end_iso||'';}
     else{state.periodCompareCurrent=data;state.periodCompareCurrentFileName=file.name;state.periodCompareCurrentFile=file;state.periodCompareCurrentDateFrom=dateFrom||data.available_start_iso||'';state.periodCompareCurrentDateTo=dateTo||data.available_end_iso||'';}
     state.periodCompareSelectedDoctor='';state.periodCompareItemsExpanded=false;
     await doctorPeriodComparisonView(document.getElementById('main'));
-    toast('تم تحليل التقرير وإضافته للمقارنة');
+    if(movementError)toast(`تمت المقارنة، لكن تعذر تحديث حركة الأصناف: ${movementError}`,true);
+    else if(movement)toast(`تم تحليل التقرير وحفظ حركة ${Number(movement.unique_item_count||0).toLocaleString('en-US')} صنف`);
+    else toast('تم تحليل التقرير وإضافته للمقارنة');
   }catch(e){toast(e.message,true);}
 }
 async function doctorPeriodComparisonView(main){
@@ -797,17 +826,20 @@ async function doctorPeriodComparisonView(main){
     renderPeriodDoctorDetail(main,state.periodCompareSelectedDoctor);return;
   }
   const previous=state.periodComparePrevious,current=state.periodCompareCurrent,both=!!(previous&&current);
+  if(!state.periodCompareBranchId)state.periodCompareBranchId=state.doctorSalesBranchId||state.movementBranchId||(state.branches.length===1?String(state.branches[0].id):'');
   main.innerHTML=`<div class="page-head period-compare-head"><div><h2>مقارنة الفترات</h2><div class="muted">قارن تقرير مبيعات بفترة أخرى لمعرفة التحسن أو التراجع على مستوى الصيدلية وكل دكتور.</div></div><div class="page-head-actions">${both?'<button class="btn btn-soft" id="periodComparePdf">🧾 تصدير المقارنة PDF</button><button class="btn btn-ghost" id="periodCompareSwap">⇄ تبديل الفترتين</button>':''}<button class="btn btn-soft" id="periodCompareBack">← مبيعات الدكاترة</button></div></div>
   <section class="panel period-compare-note"><strong>مقارنة عادلة للفترات المختلفة</strong><span>إجمالي المبيعات يظهر كما هو، لكن مؤشر التحسن يعتمد على المبيعات/يوم، فواتير/يوم، متوسط الفاتورة وMedian. KPI يُحسب نسبيًا داخل فريق كل فترة، لذلك تغيره يوضح تغير موقع الدكتور مقارنة بزملائه.</span></section>
+  <section class="panel period-unified-source"><div><strong>نفس CSV يخدم المقارنة والحركة</strong><span>أي تقرير جديد ترفعه هنا يُحفظ كذلك ضمن حركة الأصناف ويحدث معدل البيع المعتمد.</span></div><div class="field"><label>الفرع *</label><select class="select" id="periodCompareBranch"><option value="">— اختر الفرع —</option>${branchOptions(false,false)}</select></div></section>
   <div class="period-upload-grid">
     ${periodCompareReportCard('previous','الفترة السابقة',previous,state.periodComparePreviousFileName)}
     ${periodCompareReportCard('current','الفترة الجديدة',current,state.periodCompareCurrentFileName)}
   </div>
   <div id="periodCompareResults">${both?'<div class="loading">جاري تجهيز المقارنة...</div>':'<section class="panel"><div class="empty">ارفع التقريرين حتى تظهر المقارنة.</div></section>'}</div>`;
   document.getElementById('periodCompareBack').onclick=()=>go('doctorsales');
+  const periodBranch=document.getElementById('periodCompareBranch');if(periodBranch){periodBranch.value=state.periodCompareBranchId||'';periodBranch.onchange=()=>{state.periodCompareBranchId=periodBranch.value;state.doctorSalesBranchId=periodBranch.value||state.doctorSalesBranchId;};}
   for(const slot of ['Previous','Current']){
     const lower=slot==='Previous'?'previous':'current',upload=document.getElementById(`uploadPeriodCompare${slot}`),input=document.getElementById(`filePeriodCompare${slot}`),use=document.getElementById(`useCurrentPeriodCompare${slot}`),apply=document.getElementById(`applyDatePeriodCompare${slot}`);
-    if(upload&&input){upload.onclick=()=>input.click();input.onchange=()=>periodCompareAnalyzeFile(input.files?.[0],lower);}
+    if(upload&&input){upload.onclick=()=>input.click();input.onchange=()=>periodCompareAnalyzeFile(input.files?.[0],lower,'','',true);}
     if(use)use.onclick=async()=>{
       if(lower==='previous'){state.periodComparePrevious=state.doctorSalesAnalysis;state.periodComparePreviousFileName=state.doctorSalesFileName||'التقرير المحمّل';state.periodComparePreviousFile=state.doctorSalesFile;state.periodComparePreviousDateFrom=state.doctorSalesAnalysis?.filter_start_iso||state.doctorSalesAnalysis?.available_start_iso||'';state.periodComparePreviousDateTo=state.doctorSalesAnalysis?.filter_end_iso||state.doctorSalesAnalysis?.available_end_iso||'';}
       else{state.periodCompareCurrent=state.doctorSalesAnalysis;state.periodCompareCurrentFileName=state.doctorSalesFileName||'التقرير المحمّل';state.periodCompareCurrentFile=state.doctorSalesFile;state.periodCompareCurrentDateFrom=state.doctorSalesAnalysis?.filter_start_iso||state.doctorSalesAnalysis?.available_start_iso||'';state.periodCompareCurrentDateTo=state.doctorSalesAnalysis?.filter_end_iso||state.doctorSalesAnalysis?.available_end_iso||'';}
@@ -819,7 +851,7 @@ async function doctorPeriodComparisonView(main){
       if(!file){toast('أعد رفع التقرير حتى نقدر نطبق فترة مخصصة.',true);return;}
       if(!from||!to||from>to){toast('راجع تاريخ البداية والنهاية.',true);return;}
       apply.disabled=true;apply.textContent='جاري التطبيق...';
-      await periodCompareAnalyzeFile(file,lower,from,to);
+      await periodCompareAnalyzeFile(file,lower,from,to,false);
     };
   }
   const swap=document.getElementById('periodCompareSwap');
@@ -1077,7 +1109,7 @@ function movementMatchBadge(row){
   return `<span class="movement-match matched">${esc(labels[row.matched_by]||'مطابق')}</span>`;
 }
 async function renderMovementAnalysis(box){
-  box.innerHTML=`<div class="page-head movement-head"><div><h3>تحليل حركة الأصناف</h3><div class="muted">ارفع تقرير الحركة كما يخرج من منظومة البيع، والبرنامج يجمع المبيعات ويحوّل الفرط إلى علب.</div></div>${can('manage_item_catalog')?'<div class="page-head-actions"><button class="btn btn-primary" id="uploadMovementReport">+ رفع تقرير حركة</button></div>':''}</div>
+  box.innerHTML=`<div class="page-head movement-head"><div><h3>تحليل حركة الأصناف</h3><div class="muted">نفس تقرير CSV المستخدم في مبيعات الدكاترة هو مصدر حركة الأصناف ومعدلات البيع.</div></div>${can('manage_item_catalog')?'<div class="page-head-actions"><button class="btn btn-primary" id="uploadMovementReport">+ رفع تقرير المبيعات والحركة</button></div>':''}</div>
   <section class="movement-filter-panel"><div class="movement-filters"><div class="field"><label>الفرع</label><select class="select" id="movementBranchFilter"><option value="">كل الفروع</option>${branchOptions(false,false)}</select></div><div class="field"><label>التقرير</label><select class="select" id="movementReportSelect"><option value="">جاري تحميل التقارير...</option></select></div><div class="field"><label>الحالة</label><select class="select" id="movementStatusFilter"><option value="all">كل الأصناف</option><option value="unmatched">تحتاج مطابقة</option><option value="blocking">غير محسوبة بسبب الفرط</option></select></div><div class="field"><label>ترتيب معدل البيع</label><select class="select" id="movementSortFilter"><option value="desc">الأعلى إلى الأقل</option><option value="asc">الأقل إلى الأعلى</option></select></div></div><div class="toolbar movement-search-toolbar"><input class="input" id="movementSearch" value="${esc(state.movementSearch)}" placeholder="بحث باسم الصنف أو الكود..."></div></section>
   <div id="movementAnalysisBox"><div class="loading">جاري تحميل تقارير الحركة...</div></div>`;
   const branch=document.getElementById('movementBranchFilter'),status=document.getElementById('movementStatusFilter'),sort=document.getElementById('movementSortFilter'),search=document.getElementById('movementSearch');
@@ -1152,12 +1184,21 @@ function renderMovementRows(){
   box.querySelectorAll('[data-add-movement-catalog]').forEach(b=>b.onclick=()=>movementAddToCatalogModal(state.movementRows.find(x=>x.id===b.dataset.addMovementCatalog)));
 }
 function movementUploadModal(){
-  let preview=null;const wrap=showModal('رفع تقرير حركة الأصناف',`<form id="movementUploadForm" class="form-grid"><div class="field"><label>الفرع *</label><select class="select" name="branch_id" required><option value="">— اختر الفرع —</option>${branchOptions(false,false)}</select></div><div class="field"><label>تقرير الحركة *</label><input class="input" type="file" name="file" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required><div class="hint">ارفع الملف كما يخرج من منظومة البيع بدون تعديل.</div></div><div class="full"><button class="btn btn-soft" id="previewMovementFile" type="button">قراءة التقرير</button></div></form><div id="movementPreviewBox"><div class="hint">بعد قراءة الملف سيظهر تاريخ التقرير وعدد الأصناف قبل الحفظ.</div></div>`,async()=>{
-    const form=document.getElementById('movementUploadForm');if(!form.reportValidity())return false;if(!preview){toast('اضغط قراءة التقرير أولًا',true);return false;}const fd=new FormData(form);try{const data=await api('/api/item-movements/import',{method:'POST',body:fd});state.movementBranchId=String(fd.get('branch_id')||'');state.movementReportId=data.report_id;const branchFilter=document.getElementById('movementBranchFilter');if(branchFilter)branchFilter.value=state.movementBranchId;invalidateItemSalesRates();toast('تم حفظ تحليل حركة الأصناف وتحديث معدل البيع المعتمد');await loadMovementReports();return true;}catch(e){toast(e.message,true);return false;}
-  },{saveText:'حفظ التحليل',large:true});
-  const form=wrap.querySelector('#movementUploadForm'),previewBox=wrap.querySelector('#movementPreviewBox');if(state.movementBranchId)form.elements.branch_id.value=state.movementBranchId;const resetPreview=()=>{preview=null;previewBox.innerHTML='<div class="hint">اضغط قراءة التقرير للتأكد من الفترة وعدد الأصناف قبل الحفظ.</div>';};form.elements.branch_id.onchange=resetPreview;form.elements.file.onchange=resetPreview;
-  wrap.querySelector('#previewMovementFile').onclick=async()=>{if(!form.reportValidity())return;const btn=wrap.querySelector('#previewMovementFile');btn.disabled=true;previewBox.innerHTML='<div class="loading">جاري قراءة تقرير الحركة...</div>';try{const fd=new FormData(form);preview=await api('/api/item-movements/preview',{method:'POST',body:fd});previewBox.innerHTML=`<div class="movement-preview-grid"><div><span>الفترة</span><strong>${esc(preview.period_start)} → ${esc(preview.period_end)}</strong></div><div><span>عدد الأيام</span><strong>${Number(preview.days_count)}</strong></div><div><span>حركات البيع</span><strong>${Number(preview.transaction_count).toLocaleString('en-US')}</strong></div><div><span>الأصناف</span><strong>${Number(preview.unique_item_count).toLocaleString('en-US')}</strong></div><div><span>تحتاج مطابقة</span><strong>${Number(preview.unresolved_count).toLocaleString('en-US')}</strong></div><div><span>تمنع حساب الفرط</span><strong>${Number(preview.blocking_count).toLocaleString('en-US')}</strong></div></div>${preview.source_name?`<div class="hint">اسم المصدر داخل التقرير: ${esc(preview.source_name)}</div>`:''}<div class="movement-preview-note">الأصناف المطابقة تُحسب تلقائيًا. غير المطابقة تُحفظ في قائمة للمطابقة مرة واحدة، وبعدها يتذكرها البرنامج في التقارير القادمة.</div>`;}catch(e){preview=null;previewBox.innerHTML=`<div class="empty">${esc(e.message)}</div>`;toast(e.message,true);}finally{btn.disabled=false;}};
+  let preview=null;const wrap=showModal('رفع تقرير المبيعات والحركة',`<form id="movementUploadForm" class="form-grid"><div class="field"><label>الفرع *</label><select class="select" name="branch_id" required><option value="">— اختر الفرع —</option>${branchOptions(false,false)}</select></div><div class="field"><label>تقرير CSV الموحد *</label><input class="input" type="file" name="file" accept=".csv,text/csv" required><div class="hint">نفس CSV الذي تستخدمه في مبيعات الدكاترة. عند الحفظ سيحدث حركة الأصناف ومعدل البيع، ويصبح تحليل الدكاترة جاهزًا أيضًا.</div></div><div class="full"><button class="btn btn-soft" id="previewMovementFile" type="button">قراءة التقرير</button></div></form><div id="movementPreviewBox"><div class="hint">بعد قراءة الملف سيظهر تاريخ التقرير وعدد الأصناف قبل الحفظ.</div></div>`,async()=>{
+    const form=document.getElementById('movementUploadForm');if(!form.reportValidity())return false;if(!preview){toast('اضغط قراءة التقرير أولًا',true);return false;}
+    const file=form.elements.file.files?.[0],branchId=String(form.elements.branch_id.value||'');
+    const fd=new FormData(form);
+    try{
+      const data=await api('/api/item-movements/import',{method:'POST',body:fd});state.movementBranchId=branchId;state.doctorSalesBranchId=branchId;state.movementReportId=data.report_id;const branchFilter=document.getElementById('movementBranchFilter');if(branchFilter)branchFilter.value=state.movementBranchId;invalidateItemSalesRates();state.shortagesAnalysis=null;
+      let doctorMessage='';
+      if(file){try{const doctor=await analyzeDoctorSalesFile(file);state.doctorSalesAnalysis=doctor;state.doctorSalesFile=file;state.doctorSalesFileName=file.name;state.doctorSalesDateFrom=doctor.available_start_iso||'';state.doctorSalesDateTo=doctor.available_end_iso||'';state.doctorSalesSelectedDoctor='';doctorMessage=` · ${Number(doctor.totals?.invoice_count||0).toLocaleString('en-US')} فاتورة نقدية جاهزة للدكاترة`;}catch(e){doctorMessage=' · حركة الأصناف حُفظت لكن تعذر تحليل الدكاترة من الملف';}}
+      toast(`تم حفظ التقرير الموحد وتحديث معدل البيع${doctorMessage}`);await loadMovementReports();return true;
+    }catch(e){toast(e.message,true);return false;}
+  },{saveText:'حفظ التقرير الموحد',large:true});
+  const form=wrap.querySelector('#movementUploadForm'),previewBox=wrap.querySelector('#movementPreviewBox');if(state.movementBranchId)form.elements.branch_id.value=state.movementBranchId;else if(state.doctorSalesBranchId)form.elements.branch_id.value=state.doctorSalesBranchId;const resetPreview=()=>{preview=null;previewBox.innerHTML='<div class="hint">اضغط قراءة التقرير للتأكد من الفترة وعدد الأصناف قبل الحفظ.</div>';};form.elements.branch_id.onchange=resetPreview;form.elements.file.onchange=resetPreview;
+  wrap.querySelector('#previewMovementFile').onclick=async()=>{if(!form.reportValidity())return;const btn=wrap.querySelector('#previewMovementFile');btn.disabled=true;previewBox.innerHTML='<div class="loading">جاري قراءة تقرير CSV...</div>';try{const fd=new FormData(form);preview=await api('/api/item-movements/preview',{method:'POST',body:fd});previewBox.innerHTML=`<div class="movement-preview-grid"><div><span>الفترة</span><strong>${esc(preview.period_start)} → ${esc(preview.period_end)}</strong></div><div><span>عدد الأيام</span><strong>${Number(preview.days_count)}</strong></div><div><span>أسطر المبيعات</span><strong>${Number(preview.transaction_count).toLocaleString('en-US')}</strong></div><div><span>الأصناف</span><strong>${Number(preview.unique_item_count).toLocaleString('en-US')}</strong></div><div><span>تحتاج مطابقة</span><strong>${Number(preview.unresolved_count).toLocaleString('en-US')}</strong></div><div><span>تمنع حساب الفرط</span><strong>${Number(preview.blocking_count).toLocaleString('en-US')}</strong></div></div>${preview.source_name?`<div class="hint">اسم المصدر داخل التقرير: ${esc(preview.source_name)}</div>`:''}<div class="movement-preview-note">حركة الأصناف = المبيعات النقدية + مبيعات الآجل − المردودات. المطابقة تبدأ بالكود ثم الاسم والمطابقات المحفوظة.</div>`;}catch(e){preview=null;previewBox.innerHTML=`<div class="empty">${esc(e.message)}</div>`;toast(e.message,true);}finally{btn.disabled=false;}};
 }
+
 function movementMapModal(row){
   if(!row)return;let selectedId='';let timer=null;const wrap=showModal('مطابقة صنف تقرير الحركة',`<div class="movement-map-source"><small>الاسم في تقرير البيع</small><strong>${esc(row.report_name)}</strong><span>${movementNumber(row.boxes_sold,2)} علبة + ${movementNumber(row.loose_sold,2)} فرط</span></div><div class="field"><label>ابحث في دليل الأصناف</label><input class="input" id="movementCatalogSearch" placeholder="اكتب جزءًا من الاسم أو الكود..."></div><div id="movementCatalogResults"><div class="hint">اكتب اسم الصنف الصحيح كما هو موجود في دليل الأصناف.</div></div>`,async()=>{if(!selectedId){toast('اختر الصنف الصحيح من دليل الأصناف',true);return false;}try{await api(`/api/item-movements/rows/${row.id}/map`,{method:'POST',body:JSON.stringify({item_id:selectedId})});invalidateItemSalesRates();toast('تم حفظ المطابقة وسيُعاد احتساب معدل البيع المعتمد');await loadMovementReportDetail();return true;}catch(e){toast(e.message,true);return false;}},{saveText:'حفظ المطابقة',large:true});
   const input=wrap.querySelector('#movementCatalogSearch'),results=wrap.querySelector('#movementCatalogResults');

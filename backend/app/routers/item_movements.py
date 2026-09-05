@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import re
 import unicodedata
@@ -24,7 +26,7 @@ from ..xls_biff import read_first_sheet_rows
 
 router = APIRouter(prefix="/api/item-movements", tags=["item-movements"])
 
-MAX_REPORT_BYTES = 15 * 1024 * 1024
+MAX_REPORT_BYTES = 20 * 1024 * 1024
 MAX_REPORT_ROWS = 50000
 BOX_UNIT = "علبة"
 LOOSE_UNIT = "فرط"
@@ -52,6 +54,16 @@ def _text(value: Any) -> str:
 def _normalize_name(value: str) -> str:
     value = unicodedata.normalize("NFKC", value or "").casefold().strip()
     return " ".join(value.split())
+
+
+def _normalize_code(value: Any) -> str:
+    text = _text(value)
+    if not text or text == "0":
+        return ""
+    # Excel/CSV exports sometimes render a numeric code as 12345.0.
+    if re.fullmatch(r"\d+\.0+", text):
+        text = text.split(".", 1)[0]
+    return unicodedata.normalize("NFKC", text).strip().casefold()
 
 
 def _number(value: Any) -> float | None:
@@ -109,16 +121,82 @@ def _rows_from_xls(content: bytes) -> list[list[Any]]:
         raise HTTPException(422, "تعذر قراءة ملف .xls الصادر من منظومة البيع") from exc
 
 
+def _rows_from_csv(content: bytes) -> list[list[Any]]:
+    text = None
+    for encoding in ("utf-8-sig", "utf-8", "cp1256"):
+        try:
+            text = content.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        raise HTTPException(422, "تعذر قراءة ترميز ملف CSV")
+    try:
+        rows: list[list[Any]] = []
+        for idx, row in enumerate(csv.reader(io.StringIO(text))):
+            if idx >= MAX_REPORT_ROWS:
+                break
+            rows.append(list(row))
+        return rows
+    except csv.Error as exc:
+        raise HTTPException(422, "تعذر قراءة تقرير CSV") from exc
+
+
 async def _read_report(file: UploadFile) -> tuple[bytes, list[list[Any]]]:
     filename = (file.filename or "").lower()
-    if not (filename.endswith(".xls") or filename.endswith(".xlsx")):
-        raise HTTPException(422, "ارفع تقرير حركة بصيغة .xls أو .xlsx")
+    if not (filename.endswith(".csv") or filename.endswith(".xls") or filename.endswith(".xlsx")):
+        raise HTTPException(422, "ارفع تقرير المبيعات والحركة بصيغة CSV (أو Excel القديم)")
     content = await file.read(MAX_REPORT_BYTES + 1)
     if not content:
         raise HTTPException(422, "ملف التقرير فارغ")
     if len(content) > MAX_REPORT_BYTES:
-        raise HTTPException(413, "حجم تقرير الحركة أكبر من 15 MB")
-    return content, (_rows_from_xls(content) if filename.endswith(".xls") else _rows_from_xlsx(content))
+        raise HTTPException(413, "حجم تقرير الحركة أكبر من 20 MB")
+    if filename.endswith(".csv"):
+        rows = _rows_from_csv(content)
+    elif filename.endswith(".xls"):
+        rows = _rows_from_xls(content)
+    else:
+        rows = _rows_from_xlsx(content)
+    return content, rows
+
+
+def _value_date(value: Any) -> date | None:
+    parsed = _excel_date(value)
+    if parsed:
+        return parsed
+    text = _text(value).split()[0] if _text(value) else ""
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _label_value(row: list[Any], label: str) -> str:
+    target = _normalize_name(label.replace("：", ":"))
+    for index, value in enumerate(row):
+        current = _normalize_name(_text(value).replace("：", ":"))
+        if current == target and index > 0:
+            return _text(row[index - 1])
+    return ""
+
+
+def _detail_item_values(row: list[Any]) -> dict[str, str]:
+    headers = ["الإجمالي", "السعر", "التعبئة", "الكمية", "اسم الصنف", "ر.ت"]
+    positions: list[int] = []
+    for header in headers:
+        try:
+            positions.append(next(i for i, value in enumerate(row) if _text(value) == header))
+        except StopIteration:
+            return {}
+    if positions != list(range(positions[0], positions[0] + len(headers))):
+        return {}
+    values_start = positions[-1] + 1
+    if len(row) < values_start + len(headers):
+        return {}
+    values = row[values_start:values_start + len(headers)]
+    return dict(zip(headers, map(_text, values)))
 
 
 def _detect_period(rows: list[list[Any]]) -> tuple[date, date, str | None]:
@@ -127,22 +205,37 @@ def _detect_period(rows: list[list[Any]]) -> tuple[date, date, str | None]:
     first_rows = rows[:8]
     source_name = None
     if first_rows and first_rows[0]:
-        source_name = next((_text(x) for x in first_rows[0] if _text(x)), None)
+        first = first_rows[0]
+        is_detailed_csv = any(_normalize_name(_text(x)) in {_normalize_name(": من"), _normalize_name(": إلي"), _normalize_name(": إلى")} for x in first)
+        if is_detailed_csv and len(first) > 2:
+            # The detailed CSV used by doctor sales stores the pharmacy/source in column 3.
+            source_name = _text(first[2]) or None
+        if not source_name:
+            source_name = next((_text(x) for x in first if _text(x)), None)
 
-    # Preferred layout used by the pharmacy sales system:
+    # Detailed CSV layout used by doctor sales: date immediately before : من / : إلي.
+    for row in first_rows:
+        start_text = _label_value(row, ": من")
+        end_text = _label_value(row, ": إلي") or _label_value(row, ": إلى")
+        start = _value_date(start_text)
+        end = _value_date(end_text)
+        if start and end and end >= start:
+            return start, end, source_name
+
+    # Preferred legacy Excel layout used by the pharmacy sales system:
     # ... [end date, ': إلي', start date, ': تقرير حركة خلال الفترة من']
     for row in first_rows:
         for index, value in enumerate(row):
             label = _text(value)
             if "تقرير حركة خلال الفترة من" in label:
-                start = _excel_date(row[index - 1]) if index >= 1 else None
+                start = _value_date(row[index - 1]) if index >= 1 else None
                 end = None
                 for left in range(index - 2, max(-1, index - 7), -1):
                     if left < 0:
                         break
                     if "إلي" in _text(row[left]) or "إلى" in _text(row[left]):
                         if left >= 1:
-                            end = _excel_date(row[left - 1])
+                            end = _value_date(row[left - 1])
                         break
                 if start and end and end >= start:
                     return start, end, source_name
@@ -150,7 +243,7 @@ def _detect_period(rows: list[list[Any]]) -> tuple[date, date, str | None]:
     dates: list[date] = []
     for row in first_rows:
         for value in row:
-            parsed = _excel_date(value)
+            parsed = _value_date(value)
             if parsed and date(2020, 1, 1) <= parsed <= date(2100, 12, 31):
                 dates.append(parsed)
     if len(dates) >= 2:
@@ -159,12 +252,76 @@ def _detect_period(rows: list[list[Any]]) -> tuple[date, date, str | None]:
 
 
 def _aggregate_sales(rows: list[list[Any]]) -> tuple[dict[str, dict[str, Any]], int]:
+    """Aggregate net item movement.
+
+    V36 prefers the detailed CSV also used by doctor sales. Cash + credit sales
+    increase demand; returns decrease it. Legacy XLS/XLSX movement reports stay
+    supported as a fallback.
+    """
     aggregates: dict[str, dict[str, Any]] = {}
     transaction_count = 0
+    detailed_rows_found = 0
 
     for row in rows:
-        # The generated report has a movement type cell. Use that anchor instead
-        # of trusting visible Excel column headers/RTL positions.
+        movement_type = _label_value(row, ": نوع الحركة")
+        item_values = _detail_item_values(row)
+        if not movement_type or not item_values:
+            continue
+
+        is_return = "مردود" in movement_type or "مرتجع" in movement_type
+        is_sale = movement_type.startswith("مبيعات") and not is_return
+        if not (is_sale or is_return):
+            continue
+
+        item_name = _text(item_values.get("اسم الصنف"))
+        item_code = _text(item_values.get("ر.ت"))
+        quantity = _number(item_values.get("الكمية"))
+        unit = _text(item_values.get("التعبئة"))
+        if not item_name or quantity is None or quantity < 0 or unit not in {BOX_UNIT, LOOSE_UNIT}:
+            continue
+
+        detailed_rows_found += 1
+        normalized_name = _normalize_name(item_name)
+        normalized_code = _normalize_code(item_code)
+        aggregate_key = f"code:{normalized_code}" if normalized_code else f"name:{normalized_name}"
+        storage_norm = f"code:{normalized_code}|{normalized_name}" if normalized_code else normalized_name
+        bucket = aggregates.setdefault(aggregate_key, {
+            "report_name": item_name,
+            "report_name_norm": storage_norm,
+            "match_name_norm": normalized_name,
+            "report_code": item_code if normalized_code else "",
+            "boxes_sold": 0.0,
+            "loose_sold": 0.0,
+        })
+        if len(item_name) > len(bucket["report_name"]):
+            bucket["report_name"] = item_name
+            bucket["match_name_norm"] = normalized_name
+            bucket["report_name_norm"] = f"code:{normalized_code}|{normalized_name}" if normalized_code else normalized_name
+        if not bucket.get("report_code") and normalized_code:
+            bucket["report_code"] = item_code
+
+        signed_quantity = -quantity if is_return else quantity
+        if unit == BOX_UNIT:
+            bucket["boxes_sold"] += signed_quantity
+        else:
+            bucket["loose_sold"] += signed_quantity
+        if is_sale:
+            transaction_count += 1
+
+    if detailed_rows_found:
+        # A return-heavy period can be net negative. For demand forecasting we do
+        # not create a negative sales rate; zero means no positive net demand.
+        for bucket in aggregates.values():
+            bucket["_signed_boxes"] = round(float(bucket["boxes_sold"]), 6)
+            bucket["_signed_loose"] = round(float(bucket["loose_sold"]), 6)
+            bucket["boxes_sold"] = max(0.0, bucket["_signed_boxes"])
+            bucket["loose_sold"] = max(0.0, bucket["_signed_loose"])
+        if not aggregates:
+            raise HTTPException(422, "لم نجد حركات مبيعات أو مردودات صالحة داخل تقرير CSV")
+        return aggregates, transaction_count
+
+    # Legacy Excel movement report parser.
+    for row in rows:
         movement_index = next((i for i, value in enumerate(row) if i >= 3 and _text(value).startswith("مبيعات") and _text(row[i - 3]) in {BOX_UNIT, LOOSE_UNIT}), None)
         if movement_index is None:
             continue
@@ -175,21 +332,20 @@ def _aggregate_sales(rows: list[list[Any]]) -> tuple[dict[str, dict[str, Any]], 
         movement_type = _text(row[movement_index])
         if not item_name or quantity is None or quantity < 0 or unit not in {BOX_UNIT, LOOSE_UNIT}:
             continue
-        # Explicitly exclude rows that could be a return/refund if the export
-        # format later adds them to the same report.
-        if "مرتجع" in movement_type:
+        if "مرتجع" in movement_type or "مردود" in movement_type:
             continue
 
         normalized = _normalize_name(item_name)
         if not normalized:
             continue
-        bucket = aggregates.setdefault(normalized, {
+        bucket = aggregates.setdefault(f"name:{normalized}", {
             "report_name": item_name,
             "report_name_norm": normalized,
+            "match_name_norm": normalized,
+            "report_code": "",
             "boxes_sold": 0.0,
             "loose_sold": 0.0,
         })
-        # Keep the cleanest/longest original spelling as the display label.
         if len(item_name) > len(bucket["report_name"]):
             bucket["report_name"] = item_name
         if unit == BOX_UNIT:
@@ -225,39 +381,52 @@ def _resolve_rows(
     aggregates: dict[str, dict[str, Any]], catalog: list[dict[str, Any]], aliases: dict[str, str], days_count: int
 ) -> list[dict[str, Any]]:
     by_id = {str(x["id"]): x for x in catalog}
+    by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in catalog:
-        by_name[_normalize_name(str(item.get("item_name") or ""))].append(item)
+        code = _normalize_code(item.get("item_code"))
+        name = _normalize_name(str(item.get("item_name") or ""))
+        if code:
+            by_code[code].append(item)
+        if name:
+            by_name[name].append(item)
 
     resolved: list[dict[str, Any]] = []
-    for normalized, aggregate in aggregates.items():
+    for _aggregate_key, aggregate in aggregates.items():
         item = None
         matched_by = "unmatched"
-        # The current catalog name is the primary source of truth. Learned
-        # aliases are used when the report spelling is not a unique current
-        # catalog name. This avoids an old alias overriding a newly imported
-        # canonical name that now belongs to another code.
-        exact = by_name.get(normalized) or []
-        if len(exact) == 1:
-            item = exact[0]
+        normalized_name = str(aggregate.get("match_name_norm") or aggregate.get("report_name_norm") or "")
+        normalized_code = _normalize_code(aggregate.get("report_code"))
+
+        # V36: the detailed CSV carries the real item code. It is authoritative
+        # and is tried before the name/learned alias, so renamed items stay one item.
+        code_matches = by_code.get(normalized_code) or [] if normalized_code else []
+        if len(code_matches) == 1:
+            item = code_matches[0]
             matched_by = "exact"
         else:
-            alias_item_id = aliases.get(normalized)
-            if alias_item_id and alias_item_id in by_id:
-                item = by_id[alias_item_id]
-                matched_by = "alias"
+            exact = by_name.get(normalized_name) or []
+            if len(exact) == 1:
+                item = exact[0]
+                matched_by = "exact"
+            else:
+                alias_item_id = aliases.get(normalized_name)
+                if alias_item_id and alias_item_id in by_id:
+                    item = by_id[alias_item_id]
+                    matched_by = "alias"
 
         boxes = round(float(aggregate["boxes_sold"]), 6)
         loose = round(float(aggregate["loose_sold"]), 6)
+        signed_boxes = round(float(aggregate.get("_signed_boxes", boxes)), 6)
+        signed_loose = round(float(aggregate.get("_signed_loose", loose)), 6)
         units = int(item.get("units_per_box") or 0) if item else None
         equivalent = None
         daily = None
         if item and units and units > 0:
-            equivalent = round(boxes + loose / units, 6)
+            equivalent = round(max(0.0, signed_boxes + signed_loose / units), 6)
             daily = round(equivalent / days_count, 6)
-        elif loose == 0:
-            # Box-only sales remain mathematically valid even before the name is linked.
-            equivalent = boxes
+        elif signed_loose == 0:
+            equivalent = max(0.0, signed_boxes)
             daily = round(equivalent / days_count, 6)
 
         resolved.append({
@@ -331,7 +500,7 @@ async def _link_movement_row(
         "POST", "/rest/v1/item_name_aliases?on_conflict=report_name_norm", service=True,
         headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
         json={
-            "report_name": movement["report_name"], "report_name_norm": movement["report_name_norm"],
+            "report_name": movement["report_name"], "report_name_norm": _normalize_name(str(movement.get("report_name") or "")),
             "item_id": item["id"], "created_by": profile["id"], "updated_at": datetime.utcnow().isoformat() + "Z",
         },
     )

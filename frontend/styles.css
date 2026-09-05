@@ -129,3 +129,7 @@
 @media(max-width:1000px){.catalog-rate-panel{grid-template-columns:1fr}.shortage-setup-grid{grid-template-columns:1fr 1fr}.shortage-auto-rate{grid-column:1/-1}}
 @media(max-width:600px){.catalog-rate-panel,.shortage-setup-grid{grid-template-columns:1fr}.shortage-auto-rate{grid-column:auto}}
 .shortage-rate-warning{color:#9a5108!important;font-weight:800;background:#fff7e8;border:1px solid #ead7ae;border-radius:9px;padding:5px 8px}
+
+/* V36 — unified sales/movement CSV source */
+.unified-sales-panel,.period-unified-source{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px;background:#f4faf8;border-color:#cfe4df}.unified-sales-copy,.period-unified-source>div:first-child{display:grid;gap:5px;min-width:0}.unified-sales-copy strong,.period-unified-source strong{color:var(--green)}.unified-sales-copy span,.period-unified-source span{color:var(--muted);font-size:11px;line-height:1.7}.unified-sales-branch,.period-unified-source .field{margin:0;min-width:240px}.unified-sales-branch small{display:block;margin-top:4px}.period-unified-source{margin-bottom:12px}
+@media(max-width:700px){.unified-sales-panel,.period-unified-source{align-items:stretch;flex-direction:column}.unified-sales-branch,.period-unified-source .field{min-width:0;width:100%}}
