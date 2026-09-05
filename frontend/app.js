@@ -21,6 +21,7 @@ const state = {
   itemCatalogSearchTimer: null,
   itemCatalogRequestSeq: 0,
   movementReports: [], movementRows: [], movementReport: null, movementReportId: '', movementBranchId: '', movementSearch: '', movementStatus: 'all', movementSort: 'desc',
+  shortagesReports: [], shortagesAnalysis: null, shortagesFile: null, shortagesFileName: '', shortagesMovementReportId: '', shortagesBranchId: '', shortagesTargetDays: 14, shortagesSearch: '', shortagesStatus: 'shortage', shortagesSort: 'urgency', shortagesDraft: {},
   doctorSalesAnalysis: null, doctorSalesSearch: '', doctorSalesSort: 'net_desc', doctorSalesFileName: '', doctorSalesSelectedDoctor: '',
   doctorSalesFile: null, doctorSalesDateFrom: '', doctorSalesDateTo: '',
   doctorCompareSortKey: 'net_sales', doctorCompareSortDir: 'desc', doctorCompareA: '', doctorCompareB: '',
@@ -225,13 +226,13 @@ function syncStickyOffsets(){
 }
 function renderApp(){
   if(!state.profile)return renderLogin();
-  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',doctorsales:'view_doctor_sales',doctorcompare:'view_doctor_sales',doctorperiodcompare:'view_doctor_sales',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
+  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',shortages:'view_item_analysis',doctorsales:'view_doctor_sales',doctorcompare:'view_doctor_sales',doctorperiodcompare:'view_doctor_sales',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
   if(allowedViews[state.view] && !can(allowedViews[state.view])) state.view=can('view_dashboard')?'dashboard':can('view_invoices')?'invoices':'settings';
   const settingsVisible=can('manage_branches')||can('manage_suppliers')||can('manage_users');
   root.innerHTML=`<div class="app">
     <header class="topbar"><div class="topbar-inner"><div class="top-title"><div>💰</div><div><strong>Abdo Debts</strong><small>نظام المديونيات</small></div></div><div class="user-box">${notificationAccess()?`<button class="notification-bell" id="notificationBell" aria-label="الإشعارات" title="الإشعارات">🔔<span id="notificationBadge" class="notification-badge ${state.notificationUnread>0?'':'hidden'}">${state.notificationUnread>99?'99+':state.notificationUnread}</span></button>`:''}<span class="user-name">${esc(state.profile.full_name)}</span><button class="btn btn-ghost btn-sm" id="logoutBtn">خروج</button></div></div></header>
     <main class="main" id="main"></main>
-    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('doctorcompare','⚖️','مقارنة الدكاترة','view_doctor_sales')}${navButton('doctorperiodcompare','🔄','مقارنة الفترات','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
+    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('shortages','📦','النواقص المقترحة','view_item_analysis')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('doctorcompare','⚖️','مقارنة الدكاترة','view_doctor_sales')}${navButton('doctorperiodcompare','🔄','مقارنة الفترات','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
   </div>`;
   document.getElementById('logoutBtn').onclick=logout;const bell=document.getElementById('notificationBell');if(bell)bell.onclick=openNotifications;updateNotificationBell();
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
@@ -244,6 +245,7 @@ function openSupplierPage(id){state.view='supplier';state.supplierId=id;const u=
 async function renderView(){const main=document.getElementById('main');main.innerHTML='<div class="loading">جاري التحميل...</div>';try{
   if(state.view==='dashboard')await dashboardView(main);
   else if(state.view==='items')await itemsView(main);
+  else if(state.view==='shortages')await shortagesView(main);
   else if(state.view==='doctorsales')await doctorSalesView(main);
   else if(state.view==='doctorcompare')await doctorComparisonView(main);
   else if(state.view==='doctorperiodcompare')await doctorPeriodComparisonView(main);
@@ -1145,6 +1147,115 @@ function movementAddToCatalogModal(row){
   const defaultPack=Number(row.loose_sold||0)>0?'علبة / فرط':'علبة';
   const defaultUnits=Number(row.loose_sold||0)>0?'':'1';
   const wrap=showModal('إضافة صنف جديد إلى دليل الأصناف',`<div class="movement-map-source"><small>الاسم في تقرير الحركة</small><strong>${esc(row.report_name)}</strong><span>${movementNumber(row.boxes_sold,2)} علبة + ${movementNumber(row.loose_sold,2)} فرط</span></div><form id="movementAddCatalogForm" class="form-grid"><div class="field full"><label>اسم الصنف *</label><input class="input" name="item_name" required maxlength="240" value="${esc(row.report_name)}"></div><div class="field"><label>كود الصنف <small class="hint">(اختياري)</small></label><input class="input" name="item_code" maxlength="160" placeholder="اتركه فارغًا لإنشاء كود داخلي تلقائي"></div><div class="field"><label>وحدة البيع</label><input class="input" name="package_form" maxlength="120" value="${esc(defaultPack)}"></div><div class="field"><label>عدد الفرط في العلبة *</label><input class="input" type="number" name="units_per_box" min="1" max="100000" step="1" required value="${defaultUnits}" placeholder="مثال: 20"></div><div class="movement-preview-note full">الحفظ سيضيف الصنف إلى دليل الأصناف ويربطه بهذا التقرير فورًا. إذا كان الصنف موجودًا أصلًا باسم مختلف، استخدم «مطابقة بصنف موجود» بدل الإضافة لتجنب التكرار.</div></form>`,async()=>{const form=wrap.querySelector('#movementAddCatalogForm');if(!form.reportValidity())return false;const fd=new FormData(form);const payload={item_name:String(fd.get('item_name')||'').trim(),item_code:String(fd.get('item_code')||'').trim()||null,package_form:String(fd.get('package_form')||'').trim()||null,units_per_box:Number(fd.get('units_per_box'))};try{const result=await api(`/api/item-movements/rows/${row.id}/add-to-catalog`,{method:'POST',body:JSON.stringify(payload)});const code=result?.item?.item_code||'';toast(`تمت إضافة الصنف إلى الدليل وربطه بالتقرير${result?.generated_code&&code?` — الكود الداخلي: ${code}`:''}`);state.items=[];state.itemCatalogTotal=0;await loadMovementReportDetail();return true;}catch(e){toast(e.message,true);return false;}},{saveText:'إضافة وربط',large:true});
+}
+
+
+function shortageStatusBadge(row){
+  const cls={out:'out',urgent:'urgent',soon:'soon',monitor:'monitor',sufficient:'sufficient',unmatched:'unmatched'}[row?.status]||'unmatched';
+  return `<span class="shortage-status ${cls}">${esc(row?.status_label||'—')}</span>`;
+}
+function shortageMatchText(row){return ({code:'الكود',code_normalized:'الكود',name:'الاسم',unmatched:'غير مطابق'})[row?.matched_by]||'—';}
+function shortageReportOption(r){const branch=(r.branches||{}).name||'فرع';return `${branch} — ${r.period_start||'—'} → ${r.period_end||'—'}`;}
+async function loadShortageMovementReports(){
+  const params=new URLSearchParams();if(state.shortagesBranchId)params.set('branch_id',state.shortagesBranchId);
+  state.shortagesReports=await api(`/api/item-movements/reports${params.toString()?`?${params}`:''}`);
+  if(!state.shortagesReports.some(r=>String(r.id)===String(state.shortagesMovementReportId))){
+    const preferred=state.shortagesReports.find(r=>String(r.id)===String(state.movementReportId));
+    state.shortagesMovementReportId=String(preferred?.id||state.shortagesReports[0]?.id||'');
+  }
+  const select=document.getElementById('shortagesMovementReport');
+  if(select){
+    select.innerHTML=state.shortagesReports.length?state.shortagesReports.map(r=>`<option value="${esc(r.id)}">${esc(shortageReportOption(r))}</option>`).join(''):'<option value="">لا توجد تقارير حركة محفوظة</option>';
+    select.value=state.shortagesMovementReportId||'';
+  }
+  const analyze=document.getElementById('shortagesAnalyze');if(analyze)analyze.disabled=!state.shortagesMovementReportId;
+}
+function shortagesDraftFor(row){
+  const key=String(row.movement_row_id||row.item_code||row.item_name||'');
+  if(!state.shortagesDraft[key])state.shortagesDraft[key]={selected:Number(row.suggested_quantity||0)>0,qty:Number(row.suggested_quantity||0)};
+  return state.shortagesDraft[key];
+}
+function shortageFilteredRows(){
+  const analysis=state.shortagesAnalysis;if(!analysis)return [];
+  const q=String(state.shortagesSearch||'').trim().toLocaleLowerCase('ar');
+  let rows=[...(analysis.rows||[])];
+  if(q)rows=rows.filter(x=>`${x.item_name||''} ${x.report_name||''} ${x.stock_name||''} ${x.item_code||''} ${x.barcode||''}`.toLocaleLowerCase('ar').includes(q));
+  const status=state.shortagesStatus||'shortage';
+  if(status==='shortage')rows=rows.filter(x=>x.status!=='unmatched'&&Number(x.suggested_quantity||0)>0);
+  else if(status!=='all')rows=rows.filter(x=>x.status===status);
+  const num=(x,k,missing=Number.POSITIVE_INFINITY)=>{const n=Number(x?.[k]);return Number.isFinite(n)?n:missing;};
+  const sort=state.shortagesSort||'urgency';
+  rows.sort((a,b)=>{
+    if(sort==='daily_desc')return num(b,'daily_rate',0)-num(a,'daily_rate',0)||String(a.item_name||'').localeCompare(String(b.item_name||''),'ar');
+    if(sort==='cover_asc')return num(a,'days_cover')-num(b,'days_cover')||num(b,'daily_rate',0)-num(a,'daily_rate',0);
+    if(sort==='suggested_desc')return num(b,'suggested_quantity',0)-num(a,'suggested_quantity',0)||num(a,'days_cover')-num(b,'days_cover');
+    if(sort==='stock_asc')return num(a,'stock_quantity')-num(b,'stock_quantity')||num(b,'daily_rate',0)-num(a,'daily_rate',0);
+    return num(a,'priority_rank',99)-num(b,'priority_rank',99)||num(a,'days_cover')-num(b,'days_cover')||num(b,'daily_rate',0)-num(a,'daily_rate',0);
+  });
+  return rows;
+}
+function shortageSelectedRows(){
+  if(!state.shortagesAnalysis)return [];
+  return (state.shortagesAnalysis.rows||[]).map(row=>({row,draft:shortagesDraftFor(row)})).filter(x=>x.draft.selected&&Number(x.draft.qty||0)>0&&x.row.status!=='unmatched');
+}
+function shortageSyncDraftFromDom(box=document){
+  box.querySelectorAll?.('[data-shortage-check]').forEach(el=>{if(el.offsetParent===null)return;const key=el.dataset.shortageCheck;if(state.shortagesDraft[key])state.shortagesDraft[key].selected=!!el.checked;});
+  box.querySelectorAll?.('[data-shortage-qty]').forEach(el=>{if(el.offsetParent===null)return;const key=el.dataset.shortageQty;if(state.shortagesDraft[key])state.shortagesDraft[key].qty=Math.max(0,Math.ceil(Number(el.value||0)));});
+}
+function shortageCopyList(){
+  shortageSyncDraftFromDom();
+  const selected=shortageSelectedRows();if(!selected.length){toast('اختر صنفًا واحدًا على الأقل وحدد الكمية المطلوبة',true);return;}
+  const analysis=state.shortagesAnalysis,period=analysis?.movement_report?`${analysis.movement_report.period_start} → ${analysis.movement_report.period_end}`:'—';
+  const lines=[`النواقص المقترحة — تغطية ${Number(analysis?.target_days||0)} يوم`,`فترة الحركة: ${period}`,`تاريخ المخزون: ${analysis?.stock_report?.report_date||'—'}`,''];
+  selected.forEach((x,i)=>lines.push(`${i+1}. ${x.row.item_name||x.row.report_name||'—'}${x.row.item_code?` [${x.row.item_code}]`:''} — ${Number(x.draft.qty||0)} علبة`));
+  const text=lines.join('\n');
+  const fallback=()=>{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');toast(`تم نسخ ${selected.length} صنف`);}catch{toast('تعذر النسخ تلقائيًا',true);}ta.remove();};
+  if(navigator.clipboard?.writeText)navigator.clipboard.writeText(text).then(()=>toast(`تم نسخ ${selected.length} صنف`)).catch(fallback);else fallback();
+}
+function shortageExportCsv(){
+  shortageSyncDraftFromDom();
+  const selected=shortageSelectedRows();if(!selected.length){toast('اختر أصناف النواقص أولًا',true);return;}
+  const quote=v=>`"${String(v??'').replace(/"/g,'""')}"`;
+  const rows=[['الكود','اسم الصنف','الرصيد الحالي','معدل البيع/يوم','أيام التغطية','الحالة','المقترح','الكمية المطلوبة']];
+  selected.forEach(x=>rows.push([x.row.item_code||'',x.row.item_name||x.row.report_name||'',x.row.stock_quantity??'',x.row.daily_rate??'',x.row.days_cover??'',x.row.status_label||'',x.row.suggested_quantity??'',Number(x.draft.qty||0)]));
+  const csv='\ufeff'+rows.map(r=>r.map(quote).join(',')).join('\r\n');const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+  a.href=url;a.download=`shortages-${state.shortagesAnalysis?.stock_report?.report_date||isoToday()}.csv`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);toast(`تم تصدير ${selected.length} صنف`);
+}
+function shortageSelectVisible(value){
+  const box=document.getElementById('shortagesResults');if(!box)return;shortageSyncDraftFromDom(box);shortageFilteredRows().forEach(row=>{if(row.status==='unmatched')return;const draft=shortagesDraftFor(row);if(Number(draft.qty||0)>0)draft.selected=value;});renderShortageRows();
+}
+function renderShortageRows(){
+  const box=document.getElementById('shortagesResults');if(!box||!state.shortagesAnalysis)return;
+  const data=state.shortagesAnalysis,summary=data.summary||{},rows=shortageFilteredRows(),report=data.movement_report||{},stock=data.stock_report||{},branch=(report.branches||{}).name||'—';
+  const matchedByText={code:'بالكود',code_normalized:'بالكود',name:'بالاسم'};
+  const rowHtml=row=>{const key=String(row.movement_row_id||row.item_code||row.item_name||''),draft=shortagesDraftFor(row),canSelect=row.status!=='unmatched';return `<tr><td class="shortage-item"><strong>${esc(row.item_name||row.report_name||'—')}</strong>${row.item_code?`<small>كود: ${esc(row.item_code)}</small>`:''}${row.stock_name&&row.stock_name!==row.item_name?`<small>اسم المخزون: ${esc(row.stock_name)}</small>`:''}</td><td>${row.stock_quantity===null?'—':movementNumber(row.stock_quantity,2)}</td><td><strong>${movementNumber(row.daily_rate,3)}</strong></td><td>${row.days_cover===null?'—':movementNumber(row.days_cover,1)}</td><td>${shortageStatusBadge(row)}<small class="shortage-match-note">${esc(matchedByText[row.matched_by]||'يحتاج مطابقة')}</small></td><td>${row.suggested_quantity===null?'—':Number(row.suggested_quantity||0).toLocaleString('en-US')}</td><td>${canSelect?`<input class="input shortage-qty" type="number" min="0" step="1" value="${Number(draft.qty||0)}" data-shortage-qty="${esc(key)}">`:'—'}</td><td>${canSelect?`<input class="shortage-check" type="checkbox" ${draft.selected?'checked':''} data-shortage-check="${esc(key)}" aria-label="اختيار الصنف">`:'—'}</td></tr>`;};
+  const cardHtml=row=>{const key=String(row.movement_row_id||row.item_code||row.item_name||''),draft=shortagesDraftFor(row),canSelect=row.status!=='unmatched';return `<div class="item-card shortage-card"><div class="item-title"><span>${esc(row.item_name||row.report_name||'—')}</span>${shortageStatusBadge(row)}</div>${row.item_code?`<div class="muted">كود: ${esc(row.item_code)} · المطابقة: ${esc(shortageMatchText(row))}</div>`:''}<div class="item-meta shortage-meta"><div><span>الرصيد</span><b>${row.stock_quantity===null?'—':movementNumber(row.stock_quantity,2)}</b></div><div><span>المعدل/يوم</span><b>${movementNumber(row.daily_rate,3)}</b></div><div><span>أيام التغطية</span><b>${row.days_cover===null?'—':movementNumber(row.days_cover,1)}</b></div><div><span>المقترح</span><b>${row.suggested_quantity===null?'—':Number(row.suggested_quantity||0).toLocaleString('en-US')}</b></div></div>${canSelect?`<div class="shortage-mobile-edit"><label><input class="shortage-check" type="checkbox" ${draft.selected?'checked':''} data-shortage-check="${esc(key)}"> إضافة للقائمة</label><div class="field"><label>الكمية المطلوبة</label><input class="input shortage-qty" type="number" min="0" step="1" value="${Number(draft.qty||0)}" data-shortage-qty="${esc(key)}"></div></div>`:`<div class="movement-preview-note">الصنف نشط في الحركة لكن لم تتم مطابقته مع تقرير المخزون، لذلك لم يحسب البرنامج كمية طلب تلقائية.</div>`}</div>`;};
+  box.innerHTML=`<div class="shortage-summary cards"><div class="stat"><div class="label">النواقص المقترحة</div><div class="value">${Number(summary.shortage_count||0).toLocaleString('en-US')}</div><div class="sub">هدف تغطية ${Number(data.target_days||0)} يوم</div></div><div class="stat shortage-out-stat"><div class="label">نفد من المخزون</div><div class="value">${Number(summary.out_of_stock_count||0).toLocaleString('en-US')}</div><div class="sub">عنده حركة بيع</div></div><div class="stat shortage-urgent-stat"><div class="label">عاجل ≤ 7 أيام</div><div class="value">${Number(summary.urgent_count||0).toLocaleString('en-US')}</div><div class="sub">قبل الوصول للصفر</div></div><div class="stat"><div class="label">إجمالي المقترح</div><div class="value">${Number(summary.total_suggested_boxes||0).toLocaleString('en-US')}</div><div class="sub">علبة قبل التعديل اليدوي</div></div><div class="stat ${Number(summary.unmatched_stock_count||0)?'movement-warning-stat':''}"><div class="label">تحتاج مراجعة مطابقة</div><div class="value">${Number(summary.unmatched_stock_count||0).toLocaleString('en-US')}</div><div class="sub">غير موجودة بالمخزون بالكود/الاسم</div></div></div>
+  <section class="panel shortage-source-info"><div><strong>${esc(branch)}</strong><span>حركة: ${esc(report.period_start||'—')} → ${esc(report.period_end||'—')} (${Number(report.days_count||0)} يوم)</span><span>المخزون: ${esc(stock.report_date||'تاريخ غير مقروء')} · ${Number(stock.stock_item_count||0).toLocaleString('en-US')} صنف</span></div><small>الكمية المقترحة = (معدل البيع اليومي × ${Number(data.target_days||0)} يوم) − الرصيد الحالي، ويتم التقريب لأعلى إلى علبة كاملة.</small></section>
+  <section class="movement-filter-panel shortage-result-filters"><div class="shortage-filter-grid"><div class="field"><label>الحالة</label><select class="select" id="shortagesStatusFilter"><option value="shortage">النواقص فقط</option><option value="out">نفد</option><option value="urgent">عاجل ≤ 7 أيام</option><option value="soon">قريب ينقص 8–14</option><option value="monitor">يحتاج استكمال</option><option value="sufficient">كافي</option><option value="unmatched">تحتاج مطابقة</option><option value="all">كل الأصناف المحللة</option></select></div><div class="field"><label>الترتيب</label><select class="select" id="shortagesSortFilter"><option value="urgency">الأكثر إلحاحًا</option><option value="daily_desc">أعلى معدل بيع</option><option value="cover_asc">أقل أيام تغطية</option><option value="suggested_desc">أكبر كمية مقترحة</option><option value="stock_asc">أقل رصيد</option></select></div><div class="field shortage-search-field"><label>بحث</label><input class="input" id="shortagesSearch" value="${esc(state.shortagesSearch)}" placeholder="اسم الصنف أو الكود..."></div></div></section>
+  <div class="shortage-actions"><div><button class="btn btn-soft btn-sm" id="shortageSelectAll">تحديد الظاهر</button><button class="btn btn-ghost btn-sm" id="shortageClearVisible">إلغاء تحديد الظاهر</button></div><div><button class="btn btn-soft btn-sm" id="shortageCopy">📋 نسخ النواقص</button><button class="btn btn-primary btn-sm" id="shortageCsv">تصدير CSV</button></div></div>
+  <div class="movement-results-head"><span>عرض ${rows.length.toLocaleString('en-US')} صنف</span><small>تقدر تعدل «الكمية المطلوبة» يدويًا قبل النسخ أو التصدير.</small></div>
+  ${rows.length?`<div class="table-wrap desktop-table"><table class="shortage-table"><thead><tr><th>الصنف</th><th>الرصيد</th><th>معدل/يوم</th><th>أيام التغطية</th><th>الحالة</th><th>المقترح</th><th>المطلوب</th><th>✓</th></tr></thead><tbody>${rows.map(rowHtml).join('')}</tbody></table></div><div class="mobile-list">${rows.map(cardHtml).join('')}</div>`:'<section class="panel"><div class="empty">لا توجد أصناف مطابقة للفلتر الحالي</div></section>'}`;
+  const status=document.getElementById('shortagesStatusFilter'),sort=document.getElementById('shortagesSortFilter'),search=document.getElementById('shortagesSearch');status.value=state.shortagesStatus||'shortage';sort.value=state.shortagesSort||'urgency';
+  status.onchange=()=>{shortageSyncDraftFromDom(box);state.shortagesStatus=status.value;renderShortageRows();};sort.onchange=()=>{shortageSyncDraftFromDom(box);state.shortagesSort=sort.value;renderShortageRows();};let shortageSearchTimer=null;search.oninput=()=>{shortageSyncDraftFromDom(box);state.shortagesSearch=search.value;clearTimeout(shortageSearchTimer);shortageSearchTimer=setTimeout(()=>renderShortageRows(),280);};
+  box.querySelectorAll('[data-shortage-check]').forEach(el=>el.onchange=()=>{const key=el.dataset.shortageCheck;if(state.shortagesDraft[key])state.shortagesDraft[key].selected=el.checked;});
+  box.querySelectorAll('[data-shortage-qty]').forEach(el=>el.onchange=()=>{const key=el.dataset.shortageQty;if(state.shortagesDraft[key]){state.shortagesDraft[key].qty=Math.max(0,Math.ceil(Number(el.value||0)));el.value=state.shortagesDraft[key].qty;}});
+  document.getElementById('shortageSelectAll').onclick=()=>shortageSelectVisible(true);document.getElementById('shortageClearVisible').onclick=()=>shortageSelectVisible(false);document.getElementById('shortageCopy').onclick=shortageCopyList;document.getElementById('shortageCsv').onclick=shortageExportCsv;
+}
+async function analyzeShortages(){
+  const reportId=String(document.getElementById('shortagesMovementReport')?.value||state.shortagesMovementReportId||''),target=Math.max(1,Math.min(180,Math.round(Number(document.getElementById('shortagesTargetDays')?.value||state.shortagesTargetDays||14))));
+  if(!reportId){toast('اختر تقرير حركة أولًا',true);return;}if(!state.shortagesFile){toast('ارفع تقرير المخزون المتوفر أولًا',true);return;}
+  state.shortagesMovementReportId=reportId;state.shortagesTargetDays=target;const btn=document.getElementById('shortagesAnalyze'),box=document.getElementById('shortagesResults');btn.disabled=true;btn.textContent='جاري التحليل...';box.innerHTML='<div class="loading">جاري ربط الحركة بالمخزون وحساب النواقص...</div>';
+  try{const fd=new FormData();fd.append('movement_report_id',reportId);fd.append('target_days',String(target));fd.append('file',state.shortagesFile);const data=await api('/api/shortages/analyze',{method:'POST',body:fd});state.shortagesAnalysis=data;state.shortagesDraft={};(data.rows||[]).forEach(row=>{const key=String(row.movement_row_id||row.item_code||row.item_name||'');state.shortagesDraft[key]={selected:Number(row.suggested_quantity||0)>0,qty:Number(row.suggested_quantity||0)};});renderShortageRows();toast(`تم اقتراح ${Number(data.summary?.shortage_count||0).toLocaleString('en-US')} صنف ناقص`);}catch(e){box.innerHTML=`<section class="panel"><div class="empty">${esc(e.message)}</div></section>`;toast(e.message,true);}finally{btn.disabled=false;btn.textContent=state.shortagesAnalysis?'إعادة تحليل النواقص':'تحليل النواقص';}
+}
+async function shortagesView(main){
+  main.innerHTML=`<div class="page-head shortages-head"><div><h2>📦 النواقص المقترحة</h2><div class="muted">اربط تقرير حركة الأصناف بتقرير المخزون المتوفر، والبرنامج يقترح شن تحتاج تطلب حسب معدل البيع.</div></div><div class="page-head-actions"><button class="btn btn-soft" id="shortagesOpenMovement">فتح تحليل الحركة</button></div></div>
+  <section class="panel shortage-setup"><div class="shortage-how"><strong>طريقة الحساب</strong><span>معدل البيع من تقرير الحركة + الرصيد الحالي من تقرير المخزون = أيام التغطية والكمية المقترحة.</span></div><div class="shortage-setup-grid"><div class="field"><label>الفرع</label><select class="select" id="shortagesBranch"><option value="">كل الفروع</option>${branchOptions(false,false)}</select></div><div class="field shortage-report-field"><label>تقرير الحركة *</label><select class="select" id="shortagesMovementReport"><option value="">جاري تحميل التقارير...</option></select></div><div class="field"><label>تقرير المخزون المتوفر *</label><input class="input" id="shortagesStockFile" type="file" accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><div class="hint" id="shortagesFileName">${state.shortagesFileName?`الملف الحالي: ${esc(state.shortagesFileName)}`:'ارفع التقرير كما يخرج من منظومة المخزون بدون تعديل.'}</div></div><div class="field"><label>التغطية المستهدفة (يوم) *</label><input class="input" id="shortagesTargetDays" type="number" min="1" max="180" step="1" value="${Number(state.shortagesTargetDays||14)}"><div class="shortage-presets"><button type="button" data-days="7">7</button><button type="button" data-days="14">14</button><button type="button" data-days="21">21</button><button type="button" data-days="30">30</button></div></div></div><div class="shortage-analyze-row"><button class="btn btn-primary" id="shortagesAnalyze">${state.shortagesAnalysis?'إعادة تحليل النواقص':'تحليل النواقص'}</button><span class="hint">مثال: لو تختار 14 يوم، البرنامج يكمل رصيد كل صنف متحرك حتى يكفي تقريبًا 14 يوم.</span></div></section>
+  <div id="shortagesResults">${state.shortagesAnalysis?'<div class="loading">جاري عرض آخر تحليل...</div>':'<section class="panel"><div class="empty">اختر تقرير حركة، ارفع المخزون الحالي، وحدد مدة التغطية ثم اضغط «تحليل النواقص».</div></section>'}</div>`;
+  const branch=document.getElementById('shortagesBranch'),report=document.getElementById('shortagesMovementReport'),file=document.getElementById('shortagesStockFile'),target=document.getElementById('shortagesTargetDays');branch.value=state.shortagesBranchId||'';
+  branch.onchange=async()=>{state.shortagesBranchId=branch.value;state.shortagesMovementReportId='';await loadShortageMovementReports();};report.onchange=()=>{state.shortagesMovementReportId=report.value;};file.onchange=()=>{state.shortagesFile=file.files?.[0]||null;state.shortagesFileName=state.shortagesFile?.name||'';document.getElementById('shortagesFileName').textContent=state.shortagesFileName?`الملف الحالي: ${state.shortagesFileName}`:'ارفع التقرير كما يخرج من منظومة المخزون بدون تعديل.';};target.onchange=()=>{const n=Math.max(1,Math.min(180,Math.round(Number(target.value||14))));target.value=n;state.shortagesTargetDays=n;};
+  main.querySelectorAll('[data-days]').forEach(b=>b.onclick=()=>{target.value=b.dataset.days;state.shortagesTargetDays=Number(b.dataset.days);});document.getElementById('shortagesAnalyze').onclick=analyzeShortages;document.getElementById('shortagesOpenMovement').onclick=()=>{state.itemsTab='analysis';go('items');};
+  try{await loadShortageMovementReports();if(state.shortagesAnalysis)renderShortageRows();}catch(e){document.getElementById('shortagesResults').innerHTML=`<section class="panel"><div class="empty">${esc(e.message)}</div></section>`;toast(e.message,true);}
 }
 
 function resetItemCatalogModal(){
