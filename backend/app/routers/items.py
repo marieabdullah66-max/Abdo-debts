@@ -14,6 +14,7 @@ from ..core import (
     require_permission, sb,
 )
 from ..xls_biff import read_first_sheet_rows
+from ..sales_rates import aggregate_item_sales_rates
 
 router = APIRouter(prefix="/api/items", tags=["items"])
 
@@ -174,6 +175,15 @@ async def list_items(
     if with_meta:
         return {"items": result, "total": total if total is not None else len(result)}
     return result
+
+
+@router.get("/sales-rates")
+async def item_sales_rates(
+    branch_id: str | None = None,
+    profile: dict[str, Any] = Depends(current_profile),
+) -> Any:
+    require_permission(profile, "view_item_analysis")
+    return await aggregate_item_sales_rates(profile, branch_id)
 
 
 @router.post("")

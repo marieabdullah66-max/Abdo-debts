@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 
 from ..core import current_profile, require_branch_access, require_permission, sb
 from ..xls_biff import read_first_sheet_rows
+from ..sales_rates import aggregate_item_sales_rates
 
 router = APIRouter(prefix="/api/shortages", tags=["shortages"])
 
@@ -286,50 +287,12 @@ def _extract_stock(rows: list[list[Any]]) -> dict[str, Any]:
     }
 
 
-async def _movement_report(report_id: str, profile: dict[str, Any]) -> dict[str, Any]:
-    rows = await sb(
-        "GET",
-        "/rest/v1/item_movement_reports",
-        service=True,
-        params={
-            "select": "id,branch_id,source_name,source_filename,period_start,period_end,days_count,unique_item_count,unresolved_count,branches(name)",
-            "id": f"eq.{report_id}",
-            "limit": "1",
-        },
-    )
-    if not rows:
-        raise HTTPException(404, "تقرير الحركة غير موجود")
-    report = rows[0]
-    require_branch_access(profile, str(report["branch_id"]))
-    return report
 
-
-async def _movement_rows(report_id: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for offset in range(0, 20000, 1000):
-        batch = await sb(
-            "GET",
-            "/rest/v1/item_movement_rows",
-            service=True,
-            params={
-                "select": "id,report_name,item_id,boxes_sold,loose_sold,units_per_box,equivalent_boxes,daily_rate,matched_by,item_catalog(item_code,item_name,package_form,units_per_box)",
-                "report_id": f"eq.{report_id}",
-                "order": "daily_rate.desc.nullslast,report_name.asc",
-            },
-            headers={"Range": f"{offset}-{offset + 999}"},
-        )
-        rows.extend(batch or [])
-        if len(batch or []) < 1000:
-            break
-    return rows
-
-
-def _match_stock(
-    movement: dict[str, Any],
+def _match_stock_item(
+    rate_row: dict[str, Any],
     stock: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str]:
-    catalog = movement.get("item_catalog") or {}
-    code = _normalize_code(catalog.get("item_code"))
+    code = _normalize_code(rate_row.get("item_code"))
     if code and code in stock["by_code"]:
         return stock["by_code"][code], "code"
 
@@ -339,10 +302,8 @@ def _match_stock(
         if len(candidates) == 1:
             return candidates[0], "code_normalized"
 
-    for name in (catalog.get("item_name"), movement.get("report_name")):
-        normalized = _normalize_name(_text(name))
-        if not normalized:
-            continue
+    normalized = _normalize_name(_text(rate_row.get("item_name")))
+    if normalized:
         candidates = stock["by_name"].get(normalized) or []
         if len(candidates) == 1:
             return candidates[0], "name"
@@ -364,34 +325,39 @@ def _priority(stock_qty: float, days_cover: float, target_days: int, suggested: 
 
 
 def _analyze_shortages(
-    movement_rows: list[dict[str, Any]],
+    rate_rows: list[dict[str, Any]],
     stock: dict[str, Any],
     target_days: int,
 ) -> dict[str, Any]:
     result_rows: list[dict[str, Any]] = []
-    blocked_rate_count = 0
 
-    for movement in movement_rows:
-        daily_rate_raw = _number(movement.get("daily_rate"))
+    for rate_row in rate_rows:
+        daily_rate_raw = _number(rate_row.get("daily_rate"))
         if daily_rate_raw is None or daily_rate_raw <= 0:
-            blocked_rate_count += 1
             continue
         daily_rate = float(daily_rate_raw)
-        stock_row, matched_by = _match_stock(movement, stock)
-        catalog = movement.get("item_catalog") or {}
-        item_code = _normalize_code(catalog.get("item_code"))
-        item_name = _text(catalog.get("item_name")) or _text(movement.get("report_name"))
+        stock_row, matched_by = _match_stock_item(rate_row, stock)
+        item_code = _normalize_code(rate_row.get("item_code"))
+        item_name = _text(rate_row.get("item_name"))
+
+        base = {
+            "movement_row_id": None,
+            "item_id": rate_row.get("item_id"),
+            "item_code": item_code or None,
+            "item_name": item_name,
+            "report_name": item_name,
+            "daily_rate": round(daily_rate, 6),
+            "units_per_box": rate_row.get("units_per_box"),
+            "rate_report_count": int(rate_row.get("report_count") or 0),
+            "rate_total_equivalent_boxes": rate_row.get("total_equivalent_boxes"),
+            "last_movement_date": rate_row.get("last_movement_date"),
+        }
 
         if stock_row is None:
             result_rows.append({
-                "movement_row_id": str(movement.get("id") or ""),
-                "item_id": movement.get("item_id"),
-                "item_code": item_code or None,
-                "item_name": item_name,
-                "report_name": _text(movement.get("report_name")),
+                **base,
                 "stock_name": None,
                 "stock_quantity": None,
-                "daily_rate": round(daily_rate, 6),
                 "days_cover": None,
                 "target_quantity": round(daily_rate * target_days, 3),
                 "suggested_quantity": None,
@@ -399,7 +365,6 @@ def _analyze_shortages(
                 "status_label": "غير موجود في المخزون",
                 "priority_rank": 40,
                 "matched_by": "unmatched",
-                "units_per_box": movement.get("units_per_box") or catalog.get("units_per_box"),
             })
             continue
 
@@ -410,14 +375,11 @@ def _analyze_shortages(
         days_cover = stock_qty / daily_rate if daily_rate > 0 else 0.0
         status, status_label, rank = _priority(stock_qty, days_cover, target_days, suggested)
         result_rows.append({
-            "movement_row_id": str(movement.get("id") or ""),
-            "item_id": movement.get("item_id"),
+            **base,
             "item_code": item_code or _normalize_code(stock_row.get("item_code")) or None,
             "item_name": item_name or _text(stock_row.get("item_name")),
-            "report_name": _text(movement.get("report_name")),
             "stock_name": _text(stock_row.get("item_name")),
             "stock_quantity": round(stock_qty, 6),
-            "daily_rate": round(daily_rate, 6),
             "days_cover": round(days_cover, 3),
             "target_quantity": round(target_quantity, 3),
             "suggested_quantity": suggested,
@@ -425,7 +387,6 @@ def _analyze_shortages(
             "status_label": status_label,
             "priority_rank": rank,
             "matched_by": matched_by,
-            "units_per_box": movement.get("units_per_box") or catalog.get("units_per_box"),
             "barcode": stock_row.get("barcode") or None,
             "expiry": stock_row.get("expiry") or None,
             "classification": stock_row.get("classification") or None,
@@ -443,9 +404,7 @@ def _analyze_shortages(
     matched = [row for row in result_rows if row["status"] != "unmatched"]
     shortage_rows = [row for row in matched if int(row.get("suggested_quantity") or 0) > 0]
     summary = {
-        "movement_rows": len(movement_rows),
         "rate_ready_rows": len(result_rows),
-        "blocked_rate_count": blocked_rate_count,
         "matched_stock_count": len(matched),
         "unmatched_stock_count": sum(1 for row in result_rows if row["status"] == "unmatched"),
         "shortage_count": len(shortage_rows),
@@ -461,23 +420,45 @@ def _analyze_shortages(
 
 @router.post("/analyze")
 async def analyze_shortages(
-    movement_report_id: str = Form(...),
+    branch_id: str = Form(...),
     target_days: int = Form(14),
     file: UploadFile = File(...),
     profile: dict[str, Any] = Depends(current_profile),
 ) -> Any:
     require_permission(profile, "view_item_analysis")
+    require_branch_access(profile, branch_id)
     if target_days < 1 or target_days > 180:
         raise HTTPException(422, "مدة التغطية يجب أن تكون بين يوم واحد و180 يوم")
 
-    report = await _movement_report(movement_report_id, profile)
+    rates = await aggregate_item_sales_rates(profile, branch_id)
+    rate_meta = rates.get("meta") or {}
+    if int(rate_meta.get("effective_report_count") or 0) <= 0:
+        raise HTTPException(422, "لا توجد تقارير حركة محفوظة لهذا الفرع حتى نحسب معدل البيع المعتمد")
+    if not rates.get("rows"):
+        raise HTTPException(422, "لا توجد أصناف مطابقة بدليل الأصناف لها معدل بيع محسوب من التقارير المحفوظة")
+
     raw_stock_rows = await _read_stock_report(file)
     stock = _extract_stock(raw_stock_rows)
-    movements = await _movement_rows(movement_report_id)
-    analysis = _analyze_shortages(movements, stock, target_days)
+    analysis = _analyze_shortages(rates.get("rows") or [], stock, target_days)
+
+    # Keep a compact synthetic movement_report object for compatibility with
+    # existing export/copy UI while making it clear that the rate source is all
+    # saved movement reports, not one selected report.
+    movement_report = {
+        "branch_id": branch_id,
+        "period_start": rate_meta.get("period_start"),
+        "period_end": rate_meta.get("period_end"),
+        "days_count": rate_meta.get("coverage_days"),
+        "report_count": rate_meta.get("effective_report_count"),
+        "raw_report_count": rate_meta.get("report_count"),
+        "overlap_report_count": rate_meta.get("overlap_report_count"),
+        "branches": {"name": rate_meta.get("branch_name") or "الفرع المحدد"},
+        "source_name": "كل تقارير الحركة المحفوظة",
+    }
 
     return {
-        "movement_report": report,
+        "movement_report": movement_report,
+        "rate_source": rate_meta,
         "stock_report": {
             "source_filename": (file.filename or "")[:240],
             "report_date": stock.get("report_date"),
