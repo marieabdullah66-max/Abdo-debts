@@ -260,8 +260,8 @@ def analyze_doctor_sales_rows(
     report_period_start, report_period_end, source = _period_and_source(rows)
     report_start_date = _parse_report_date(report_period_start)
     report_end_date = _parse_report_date(report_period_end)
-    selected_start = _parse_report_date(filter_start) if filter_start else None
-    selected_end = _parse_report_date(filter_end) if filter_end else None
+    selected_start = _parse_report_date(filter_start) if filter_start else report_start_date
+    selected_end = _parse_report_date(filter_end) if filter_end else report_end_date
 
     if filter_start and selected_start is None:
         raise HTTPException(422, "تاريخ بداية الفترة غير صالح")
@@ -565,7 +565,7 @@ def analyze_doctor_sales_rows(
         "available_end_iso": _date_iso(report_end_date),
         "filter_start_iso": _date_iso(selected_start),
         "filter_end_iso": _date_iso(selected_end),
-        "is_filtered": bool(selected_start or selected_end),
+        "is_filtered": bool(filter_start or filter_end),
         "sales_scope": "cash_only",
         "doctor_count": len(result_doctors),
         "processed_rows": processed_rows,
