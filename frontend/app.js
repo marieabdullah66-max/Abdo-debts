@@ -21,6 +21,7 @@ const state = {
   itemCatalogSearchTimer: null,
   itemCatalogRequestSeq: 0,
   itemRateBranchId: '', itemSalesRates: {}, itemSalesRateMeta: null, itemSalesRateRequestSeq: 0,
+  reportBuilderAchievements:'', reportBuilderPlan:'', reportBuilder: null,
   movementReports: [], movementRows: [], movementReport: null, movementReportId: '', movementBranchId: '', movementSearch: '', movementStatus: 'all', movementSort: 'desc',
   shortagesAnalysis: null, shortagesFile: null, shortagesFileName: '', shortagesBranchId: '', shortagesTargetDays: 14, shortagesSearch: '', shortagesStatus: 'shortage', shortagesSort: 'urgency', shortagesDraft: {},
   doctorSalesAnalysis: null, doctorSalesSearch: '', doctorSalesSort: 'net_desc', doctorSalesFileName: '', doctorSalesSelectedDoctor: '',
@@ -227,13 +228,13 @@ function syncStickyOffsets(){
 }
 function renderApp(){
   if(!state.profile)return renderLogin();
-  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',shortages:'view_item_analysis',doctorsales:'view_doctor_sales',doctorcompare:'view_doctor_sales',doctorperiodcompare:'view_doctor_sales',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
+  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',shortages:'view_item_analysis',reportbuilder:'view_reports',doctorsales:'view_doctor_sales',doctorcompare:'view_doctor_sales',doctorperiodcompare:'view_doctor_sales',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
   if(allowedViews[state.view] && !can(allowedViews[state.view])) state.view=can('view_dashboard')?'dashboard':can('view_invoices')?'invoices':'settings';
   const settingsVisible=can('manage_branches')||can('manage_suppliers')||can('manage_users');
   root.innerHTML=`<div class="app">
     <header class="topbar"><div class="topbar-inner"><div class="top-title"><div>💰</div><div><strong>Abdo Debts</strong><small>نظام المديونيات</small></div></div><div class="user-box">${notificationAccess()?`<button class="notification-bell" id="notificationBell" aria-label="الإشعارات" title="الإشعارات">🔔<span id="notificationBadge" class="notification-badge ${state.notificationUnread>0?'':'hidden'}">${state.notificationUnread>99?'99+':state.notificationUnread}</span></button>`:''}<span class="user-name">${esc(state.profile.full_name)}</span><button class="btn btn-ghost btn-sm" id="logoutBtn">خروج</button></div></div></header>
     <main class="main" id="main"></main>
-    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('shortages','📦','النواقص المقترحة','view_item_analysis')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('doctorcompare','⚖️','مقارنة الدكاترة','view_doctor_sales')}${navButton('doctorperiodcompare','🔄','مقارنة الفترات','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
+    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('shortages','📦','النواقص المقترحة','view_item_analysis')}${navButton('reportbuilder','📊','تقرير شامل','view_reports')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('doctorcompare','⚖️','مقارنة الدكاترة','view_doctor_sales')}${navButton('doctorperiodcompare','🔄','مقارنة الفترات','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
   </div>`;
   document.getElementById('logoutBtn').onclick=logout;const bell=document.getElementById('notificationBell');if(bell)bell.onclick=openNotifications;updateNotificationBell();
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
@@ -247,6 +248,7 @@ async function renderView(){const main=document.getElementById('main');main.inne
   if(state.view==='dashboard')await dashboardView(main);
   else if(state.view==='items')await itemsView(main);
   else if(state.view==='shortages')await shortagesView(main);
+  else if(state.view==='reportbuilder')await reportBuilderView(main);
   else if(state.view==='doctorsales')await doctorSalesView(main);
   else if(state.view==='doctorcompare')await doctorComparisonView(main);
   else if(state.view==='doctorperiodcompare')await doctorPeriodComparisonView(main);
@@ -1306,6 +1308,30 @@ async function shortagesView(main){
   branch.onchange=()=>{state.shortagesBranchId=branch.value;state.shortagesAnalysis=null;state.shortagesDraft={};const results=document.getElementById('shortagesResults');if(results)results.innerHTML='<section class="panel"><div class="empty">تم تغيير الفرع. ارفع/اختر المخزون الحالي ثم اضغط «تحليل النواقص».</div></section>';};file.onchange=()=>{state.shortagesFile=file.files?.[0]||null;state.shortagesFileName=state.shortagesFile?.name||'';document.getElementById('shortagesFileName').textContent=state.shortagesFileName?`الملف الحالي: ${state.shortagesFileName}`:'ارفع التقرير كما يخرج من منظومة المخزون بدون تعديل.';};target.onchange=()=>{const n=Math.max(1,Math.min(180,Math.round(Number(target.value||14))));target.value=n;state.shortagesTargetDays=n;};
   main.querySelectorAll('[data-days]').forEach(b=>b.onclick=()=>{target.value=b.dataset.days;state.shortagesTargetDays=Number(b.dataset.days);});document.getElementById('shortagesAnalyze').onclick=analyzeShortages;document.getElementById('shortagesOpenMovement').onclick=()=>{state.itemsTab='analysis';go('items');};
   if(state.shortagesAnalysis)renderShortageRows();
+}
+
+
+function reportBuilderTopItems(){
+  const rows=state.movementRows||[];const map={};
+  rows.forEach(r=>{const key=r.item_id||r.report_name||'';if(!key)return;const q=Number(r.equivalent_boxes??r.boxes_sold??0);if(!map[key])map[key]={name:r.report_name||'—',qty:0};map[key].qty+=Number.isFinite(q)?q:0;});
+  return Object.values(map).sort((a,b)=>b.qty-a.qty).slice(0,30);
+}
+function reportBuilderView(main){
+  main.innerHTML=`<div class="page-head"><div><h2>📊 صناعة تقرير شامل</h2><div class="muted">تقرير إداري مرن لأي فترة يعتمد على التحليلات الموجودة في Abdo Debts.</div></div><div class="page-head-actions"><button class="btn btn-primary" id="reportBuilderPdf">🧾 إنشاء PDF</button></div></div>
+  <section class="panel report-builder-manual"><div class="field"><label>الأشياء المنجزة خلال الفترة (يدوي)</label><textarea class="textarea" id="reportAchievements" placeholder="اكتب الإنجازات...">${esc(state.reportBuilderAchievements)}</textarea></div><div class="field"><label>خطة الفترة القادمة (يدوي)</label><textarea class="textarea" id="reportPlan" placeholder="اكتب الخطة القادمة...">${esc(state.reportBuilderPlan)}</textarea></div></section>
+  <section class="panel"><div class="empty">يتم استخدام آخر تحليل مبيعات محمل، وحركة الأصناف المحملة، ومقارنة الفترات إن كانت متوفرة. الفترة الحالية: ${esc(state.doctorSalesAnalysis?.period_start||'—')} → ${esc(state.doctorSalesAnalysis?.period_end||'—')}</div></section>`;
+  document.getElementById('reportAchievements').oninput=e=>state.reportBuilderAchievements=e.target.value;
+  document.getElementById('reportPlan').oninput=e=>state.reportBuilderPlan=e.target.value;
+  document.getElementById('reportBuilderPdf').onclick=exportReportBuilderPdf;
+}
+function exportReportBuilderPdf(){
+ const d=state.doctorSalesAnalysis;if(!d){toast('ارفع تقرير المبيعات أولًا.',true);return;}
+ const doctors=(d.doctors||[]).slice().sort((a,b)=>Number(b.kpi_score||0)-Number(a.kpi_score||0));
+ const doctorRows=doctors.map((x,i)=>`<tr><td>${i+1}</td><td class="name">${esc(x.doctor)}</td><td>${doctorKpiValue(x.kpi_score)}</td><td>${money(x.net_sales)}</td><td>${money(x.average_invoice)}</td><td>${money(x.daily_average)}</td></tr>`).join('');
+ const topRows=reportBuilderTopItems().map((x,i)=>`<tr><td>${i+1}</td><td class="name">${esc(x.name)}</td><td>${movementNumber(x.qty,2)}</td></tr>`).join('');
+ const compare=state.periodComparePrevious&&state.periodCompareCurrent?`<div class="note-box">مقارنة الفترة متوفرة: ${esc(periodComparePeriodLabel(state.periodComparePrevious))} مقابل ${esc(periodComparePeriodLabel(state.periodCompareCurrent))}</div>`:'<div class="note-box">لا توجد مقارنة فترة محملة.</div>';
+ const body=`<section class="section"><h2 class="section-title">ملخص الفترة</h2><div class="cards"><div class="card"><div class="label">صافي المبيعات</div><div class="value">${money(d.totals.net_sales)}</div></div><div class="card"><div class="label">الفواتير</div><div class="value">${Number(d.totals.invoice_count||0)}</div></div><div class="card"><div class="label">متوسط KPI</div><div class="value">${doctorKpiValue(d.totals.kpi_average)}</div></div></div></section><section class="section page-break"><h2 class="section-title">تحليل الدكاترة</h2><table><thead><tr><th>#</th><th>الدكتور</th><th>KPI</th><th>الصافي</th><th>متوسط الفاتورة</th><th>المتوسط اليومي</th></tr></thead><tbody>${doctorRows}</tbody></table></section><section class="section page-break"><h2 class="section-title">أكثر 30 صنف مبيعًا</h2><table><thead><tr><th>#</th><th>الصنف</th><th>الكمية</th></tr></thead><tbody>${topRows}</tbody></table></section><section class="section page-break"><h2 class="section-title">مقارنة وإنجازات وخطة</h2>${compare}<h3>المنجزات</h3><p>${esc(state.reportBuilderAchievements||'—').replace(/\n/g,'<br>')}</p><h3>الخطة القادمة</h3><p>${esc(state.reportBuilderPlan||'—').replace(/\n/g,'<br>')}</p></section>`;
+ openDoctorPdfPrintWindow({title:'تقرير إداري شامل',subtitle:`الفترة: ${d.period_start||'—'} ← ${d.period_end||'—'}`,body,orientation:'portrait'});
 }
 
 function resetItemCatalogModal(){
