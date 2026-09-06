@@ -13,10 +13,14 @@ async def list_drafts(profile:dict[str,Any]=Depends(current_profile)):
 async def create_or_update_draft(payload:dict[str,Any],profile:dict[str,Any]=Depends(current_profile)):
     require_permission(profile,'view_dashboard')
     row={**payload,'profile_id':profile['id']}
-    if row.get('id'):
-        rid=row.pop('id')
-        return (await sb('PATCH',f'/rest/v1/report_drafts?id=eq.{rid}',service=True,json=row))[0]
-    return (await sb('POST','/rest/v1/report_drafts',service=True,json=row))[0]
+    draft_id=row.get('id')
+    if draft_id:
+        row.pop('id',None)
+        result=await sb('PATCH',f'/rest/v1/report_drafts?id=eq.{draft_id}',service=True,json=row)
+        return result[0] if result else {'id':draft_id}
+    row.pop('id',None)
+    result=await sb('POST','/rest/v1/report_drafts',service=True,json=row)
+    return result[0] if result else row
 
 @router.delete('/{draft_id}')
 async def delete_draft(draft_id:str,profile:dict[str,Any]=Depends(current_profile)):
