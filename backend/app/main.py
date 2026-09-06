@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .core import FRONTEND, close_http_client
-from .routers import admin, auth, dashboard, doctor_sales, invoices, item_movements, items, notifications, payment_plans, payments, shortages, suppliers
+from .routers import admin, auth, dashboard, doctor_sales, invoices, item_movements, items, notifications, payment_plans, payments, shortages, suppliers, report_drafts
 
 app = FastAPI(title="Abdo Debts API", version="35.0.0")
 
@@ -34,7 +34,7 @@ async def security_headers(request: Request, call_next):
 async def shutdown_http_client() -> None:
     await close_http_client()
 
-for router in (auth.router, dashboard.router, suppliers.router, invoices.router, payments.router, payment_plans.router, notifications.router, items.router, item_movements.router, shortages.router, doctor_sales.router, admin.router):
+for router in (auth.router, dashboard.router, suppliers.router, invoices.router, payments.router, payment_plans.router, notifications.router, items.router, item_movements.router, shortages.router, report_drafts.router, doctor_sales.router, admin.router):
     app.include_router(router)
 
 app.mount("/assets", StaticFiles(directory=FRONTEND), name="assets")

@@ -21,7 +21,7 @@ const state = {
   itemCatalogSearchTimer: null,
   itemCatalogRequestSeq: 0,
   itemRateBranchId: '', itemSalesRates: {}, itemSalesRateMeta: null, itemSalesRateRequestSeq: 0,
-  reportBuilderAchievements:'', reportBuilderPlan:'', reportBuilderPreparedBy:'', reportBuilderAbsences:'', reportBuilderProblems:'', reportBuilderNotes:'', reportBuilder: null,
+  reportBuilderAchievements:'', reportBuilderPlan:'', reportBuilderPreparedBy:'', reportBuilderAbsences:'', reportBuilderProblems:'', reportBuilderNotes:'', reportBuilderDraftId:null, reportBuilderDrafts:[], reportBuilder: null,
   movementReports: [], movementRows: [], movementReport: null, movementReportId: '', movementBranchId: '', movementSearch: '', movementStatus: 'all', movementSort: 'desc',
   shortagesAnalysis: null, shortagesFile: null, shortagesFileName: '', shortagesBranchId: '', shortagesTargetDays: 14, shortagesSearch: '', shortagesStatus: 'shortage', shortagesSort: 'urgency', shortagesDraft: {},
   doctorSalesAnalysis: null, doctorSalesSearch: '', doctorSalesSort: 'net_desc', doctorSalesFileName: '', doctorSalesSelectedDoctor: '',
@@ -1317,7 +1317,7 @@ function reportBuilderTopItems(){
   return Object.values(map).sort((a,b)=>b.qty-a.qty).slice(0,30);
 }
 function reportBuilderView(main){
-  main.innerHTML=`<div class="page-head"><div><h2>📊 صناعة تقرير شامل</h2><div class="muted">تقرير إداري مرن لأي فترة يعتمد على التحليلات الموجودة في Abdo Debts.</div></div><div class="page-head-actions"><button class="btn btn-primary" id="reportBuilderPdf">🧾 إنشاء PDF</button></div></div>
+  main.innerHTML=`<div class="page-head"><div><h2>📊 صناعة تقرير شامل</h2><div class="muted">تقرير إداري مرن لأي فترة يعتمد على التحليلات الموجودة في Abdo Debts.</div></div><div class="page-head-actions"><button class="btn btn-soft" id="reportDraftSave">💾 حفظ مسودة</button><button class="btn btn-primary" id="reportBuilderPdf">🧾 إنشاء PDF</button></div></div>
   <section class="panel report-builder-manual"><div class="field"><label>الأشياء المنجزة خلال الفترة (يدوي)</label><textarea class="textarea" id="reportAchievements" placeholder="اكتب الإنجازات...">${esc(state.reportBuilderAchievements)}</textarea></div><div class="field"><label>خطة الفترة القادمة (يدوي)</label><textarea class="textarea" id="reportPlan" placeholder="اكتب الخطة القادمة...">${esc(state.reportBuilderPlan)}</textarea></div><div class="field"><label>غيابات الموظفين (يدوي)</label><textarea class="textarea" id="reportAbsences" placeholder="اكتب الغيابات...">${esc(state.reportBuilderAbsences)}</textarea></div><div class="field"><label>المشاكل (يدوي)</label><textarea class="textarea" id="reportProblems" placeholder="اكتب المشاكل...">${esc(state.reportBuilderProblems)}</textarea></div><div class="field"><label>الملاحظات (يدوي)</label><textarea class="textarea" id="reportNotes" placeholder="اكتب الملاحظات...">${esc(state.reportBuilderNotes)}</textarea></div><div class="field"><label>مُعد التقرير (يدوي)</label><input class="input" id="reportPreparedBy" value="${esc(state.reportBuilderPreparedBy)}" placeholder="اسم معد التقرير"></div></section>
   <section class="panel"><div class="empty">يتم استخدام آخر تحليل مبيعات محمل، وحركة الأصناف المحملة، ومقارنة الفترات إن كانت متوفرة. الفترة الحالية: ${esc(state.doctorSalesAnalysis?.period_start||'—')} → ${esc(state.doctorSalesAnalysis?.period_end||'—')}</div></section>`;
   document.getElementById('reportAchievements').oninput=e=>state.reportBuilderAchievements=e.target.value;
@@ -1326,7 +1326,12 @@ function reportBuilderView(main){
   document.getElementById('reportProblems').oninput=e=>state.reportBuilderProblems=e.target.value;
   document.getElementById('reportNotes').oninput=e=>state.reportBuilderNotes=e.target.value;
   document.getElementById('reportPreparedBy').oninput=e=>state.reportBuilderPreparedBy=e.target.value;
+  document.getElementById('reportDraftSave').onclick=saveReportDraft;
   document.getElementById('reportBuilderPdf').onclick=exportReportBuilderPdf;
+}
+async function saveReportDraft(){
+  const payload={id:state.reportBuilderDraftId,title:`تقرير ${state.doctorSalesAnalysis?.period_start||''}-${state.doctorSalesAnalysis?.period_end||''}`,report_period_start:state.doctorSalesAnalysis?.period_start||'',report_period_end:state.doctorSalesAnalysis?.period_end||'',prepared_by:state.reportBuilderPreparedBy,absences:state.reportBuilderAbsences,problems:state.reportBuilderProblems,notes:state.reportBuilderNotes,achievements:state.reportBuilderAchievements,next_plan:state.reportBuilderPlan};
+  try{const row=await api('/api/report-drafts',{method:'POST',body:JSON.stringify(payload)});state.reportBuilderDraftId=row.id;toast('تم حفظ المسودة');}catch(e){toast(e.message,true);}
 }
 function exportReportBuilderPdf(){
  const d=state.doctorSalesAnalysis;if(!d){toast('ارفع تقرير المبيعات أولًا.',true);return;}
