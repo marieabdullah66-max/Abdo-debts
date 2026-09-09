@@ -292,6 +292,7 @@ def _aggregate_sales(rows: list[list[Any]]) -> tuple[dict[str, dict[str, Any]], 
             "report_code": item_code if normalized_code else "",
             "boxes_sold": 0.0,
             "loose_sold": 0.0,
+            "occurrence_count": 0,
         })
         if len(item_name) > len(bucket["report_name"]):
             bucket["report_name"] = item_name
@@ -305,6 +306,7 @@ def _aggregate_sales(rows: list[list[Any]]) -> tuple[dict[str, dict[str, Any]], 
             bucket["boxes_sold"] += signed_quantity
         else:
             bucket["loose_sold"] += signed_quantity
+        bucket["occurrence_count"] = int(bucket.get("occurrence_count") or 0) + 1
         if is_sale:
             transaction_count += 1
 
@@ -345,6 +347,7 @@ def _aggregate_sales(rows: list[list[Any]]) -> tuple[dict[str, dict[str, Any]], 
             "report_code": "",
             "boxes_sold": 0.0,
             "loose_sold": 0.0,
+            "occurrence_count": 0,
         })
         if len(item_name) > len(bucket["report_name"]):
             bucket["report_name"] = item_name
@@ -352,6 +355,7 @@ def _aggregate_sales(rows: list[list[Any]]) -> tuple[dict[str, dict[str, Any]], 
             bucket["boxes_sold"] += quantity
         else:
             bucket["loose_sold"] += quantity
+        bucket["occurrence_count"] = int(bucket.get("occurrence_count") or 0) + 1
         transaction_count += 1
 
     if not aggregates:
@@ -442,6 +446,71 @@ def _resolve_rows(
     return resolved
 
 
+def _merge_resolved_rows(rows: list[dict[str, Any]], days_count: int) -> list[dict[str, Any]]:
+    """Merge every movement that belongs to the same item.
+
+    Reports often repeat one item across many invoices and sometimes across
+    multiple barcodes. After catalog matching, the item_id is the safest key.
+    If a row is still unmatched, fall back to the cleaned report name so the
+    same visible item appears once instead of many duplicated rows.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        normalized_name = str(row.get("match_name_norm") or row.get("report_name_norm") or _normalize_name(str(row.get("report_name") or "")))
+        key = f"item:{row['item_id']}" if row.get("item_id") else f"name:{normalized_name}"
+        bucket = merged.get(key)
+        if not bucket:
+            bucket = {**row}
+            bucket["boxes_sold"] = 0.0
+            bucket["loose_sold"] = 0.0
+            bucket["_signed_boxes"] = 0.0
+            bucket["_signed_loose"] = 0.0
+            bucket["occurrence_count"] = 0
+            merged[key] = bucket
+        # Prefer the catalog name once matched, otherwise keep the longest clear
+        # report name. This prevents duplicate visible rows for the same item.
+        if row.get("catalog_name"):
+            bucket["report_name"] = row.get("catalog_name") or bucket.get("report_name")
+        elif len(str(row.get("report_name") or "")) > len(str(bucket.get("report_name") or "")):
+            bucket["report_name"] = row.get("report_name")
+        if not bucket.get("report_code") and row.get("report_code"):
+            bucket["report_code"] = row.get("report_code")
+        bucket["boxes_sold"] += float(row.get("boxes_sold") or 0)
+        bucket["loose_sold"] += float(row.get("loose_sold") or 0)
+        bucket["_signed_boxes"] += float(row.get("_signed_boxes", row.get("boxes_sold") or 0) or 0)
+        bucket["_signed_loose"] += float(row.get("_signed_loose", row.get("loose_sold") or 0) or 0)
+        bucket["occurrence_count"] += int(row.get("occurrence_count") or 1)
+        if row.get("item_id") and not bucket.get("item_id"):
+            bucket["item_id"] = row.get("item_id")
+            bucket["item_code"] = row.get("item_code")
+            bucket["catalog_name"] = row.get("catalog_name")
+            bucket["units_per_box"] = row.get("units_per_box")
+            bucket["matched_by"] = row.get("matched_by") or "exact"
+
+    final_rows: list[dict[str, Any]] = []
+    for row in merged.values():
+        row["boxes_sold"] = round(max(0.0, float(row.get("_signed_boxes") or row.get("boxes_sold") or 0)), 6)
+        row["loose_sold"] = round(max(0.0, float(row.get("_signed_loose") or row.get("loose_sold") or 0)), 6)
+        units = int(row.get("units_per_box") or 0) if row.get("units_per_box") else None
+        signed_boxes = float(row.get("_signed_boxes") or 0)
+        signed_loose = float(row.get("_signed_loose") or 0)
+        equivalent = None
+        daily = None
+        if units and units > 0:
+            equivalent = round(max(0.0, signed_boxes + signed_loose / units), 6)
+            daily = round(equivalent / days_count, 6)
+        elif signed_loose == 0:
+            equivalent = round(max(0.0, signed_boxes), 6)
+            daily = round(equivalent / days_count, 6)
+        row["equivalent_boxes"] = equivalent
+        row["daily_rate"] = daily
+        row.pop("_signed_boxes", None)
+        row.pop("_signed_loose", None)
+        final_rows.append(row)
+    final_rows.sort(key=lambda x: (float(x.get("daily_rate") or -1), float(x.get("equivalent_boxes") or 0), str(x.get("report_name") or "")), reverse=True)
+    return final_rows
+
+
 async def _parse_and_resolve(file: UploadFile) -> dict[str, Any]:
     _content, rows = await _read_report(file)
     start, end, source_name = _detect_period(rows)
@@ -450,7 +519,7 @@ async def _parse_and_resolve(file: UploadFile) -> dict[str, Any]:
         raise HTTPException(422, "فترة تقرير الحركة غير صالحة")
     aggregates, transaction_count = _aggregate_sales(rows)
     catalog, aliases = await _catalog_and_aliases()
-    resolved = _resolve_rows(aggregates, catalog, aliases, days_count)
+    resolved = _merge_resolved_rows(_resolve_rows(aggregates, catalog, aliases, days_count), days_count)
     return {
         "period_start": start.isoformat(),
         "period_end": end.isoformat(),
