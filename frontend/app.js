@@ -9,6 +9,7 @@ const state = {
   notificationUnread: 0, notificationTimer: null, authRefreshTimer: null,
   supplierBranchId: '',
   supplierCategoryId: '',
+  supplierSort: 'balance_desc',
   dashboardBranchId: '',
   dashboardCategoryId: '',
   dashboardPeriod: 'all',
@@ -1462,13 +1463,14 @@ async function suppliersView(main){
   const branchId=state.supplierBranchId||'',categoryId=state.supplierCategoryId||'';
   state.supplierRows=await api(branchId?`/api/suppliers?include_balance=true&branch_id=${encodeURIComponent(branchId)}`:'/api/suppliers?include_balance=true');
   main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-danger" id="resetSupplierValues">حذف القيم</button><button class="btn btn-soft" id="importSuppliers">استيراد CSV/Excel</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
-  <div class="toolbar supplier-toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."><select id="supplierBranchFilter" class="select">${branchOptions(true,false)}</select><select id="supplierCategoryFilter" class="select"><option value="">كل التصنيفات</option>${state.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+  <div class="toolbar supplier-toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."><select id="supplierBranchFilter" class="select">${branchOptions(true,false)}</select><select id="supplierCategoryFilter" class="select"><option value="">كل التصنيفات</option>${state.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><select id="supplierSortFilter" class="select"><option value="balance_desc">الأعلى قيمة</option><option value="balance_asc">الأقل قيمة</option><option value="aging_desc">أكبر Aging</option><option value="aging_asc">أقل Aging</option><option value="name_asc">الاسم أ-ي</option></select></div>
   <div class="supplier-debt-total"><div><span>إجمالي الدين المتبقي</span><small id="supplierDebtScope">${branchId?'للفرع المحدد':'لكل الفروع'}</small></div><strong class="money" id="supplierDebtTotal">${money(state.supplierRows.reduce((sum,s)=>sum+Number(s.balance||0),0))}</strong></div>
   <div id="supplierRows"></div>`;
-  const branchSelect=document.getElementById('supplierBranchFilter'),categorySelect=document.getElementById('supplierCategoryFilter');branchSelect.value=branchId;categorySelect.value=categoryId;state.supplierCategoryId=categorySelect.value;
+  const branchSelect=document.getElementById('supplierBranchFilter'),categorySelect=document.getElementById('supplierCategoryFilter'),sortSelect=document.getElementById('supplierSortFilter');branchSelect.value=branchId;categorySelect.value=categoryId;sortSelect.value=state.supplierSort||'balance_desc';state.supplierCategoryId=categorySelect.value;
   if(can('manage_suppliers')){document.getElementById('addSupplier').onclick=()=>supplierModal(null,async()=>refreshSupplierRows());document.getElementById('importSuppliers').onclick=()=>supplierImportModal();document.getElementById('resetSupplierValues').onclick=()=>resetSupplierValuesModal();}
   document.getElementById('supplierSearch').oninput=renderSupplierRows;
   categorySelect.onchange=()=>{state.supplierCategoryId=categorySelect.value;renderSupplierRows();};
+  sortSelect.onchange=()=>{state.supplierSort=sortSelect.value;renderSupplierRows();};
   branchSelect.onchange=async()=>{state.supplierBranchId=branchSelect.value;await refreshSupplierRows();};
   renderSupplierRows();
 }
@@ -1481,7 +1483,7 @@ async function refreshSupplierRows(){
     renderSupplierRows();
   }catch(e){if(box)box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;toast(e.message,true);}
 }
-function renderSupplierRows(){const box=document.getElementById('supplierRows');if(!box)return;const q=(document.getElementById('supplierSearch')?.value||'').trim().toLowerCase();const categoryId=document.getElementById('supplierCategoryFilter')?.value||state.supplierCategoryId||'';const rows=state.supplierRows.filter(s=>(!categoryId||(s.categories||[]).some(c=>c.id===categoryId))&&(!q||s.name.toLowerCase().includes(q)));
+function renderSupplierRows(){const box=document.getElementById('supplierRows');if(!box)return;const q=(document.getElementById('supplierSearch')?.value||'').trim().toLowerCase();const categoryId=document.getElementById('supplierCategoryFilter')?.value||state.supplierCategoryId||'';const sortBy=document.getElementById('supplierSortFilter')?.value||state.supplierSort||'balance_desc';state.supplierSort=sortBy;const rows=state.supplierRows.filter(s=>(!categoryId||(s.categories||[]).some(c=>c.id===categoryId))&&(!q||s.name.toLowerCase().includes(q))).sort((a,b)=>{const balA=Number(a.balance||0),balB=Number(b.balance||0);const ageA=a.aging_days===null||a.aging_days===undefined?-1:Number(a.aging_days||0),ageB=b.aging_days===null||b.aging_days===undefined?-1:Number(b.aging_days||0);if(sortBy==='balance_asc')return balA-balB||String(a.name||'').localeCompare(String(b.name||''),'ar');if(sortBy==='aging_desc')return ageB-ageA||balB-balA;if(sortBy==='aging_asc')return (ageA<0?Number.MAX_SAFE_INTEGER:ageA)-(ageB<0?Number.MAX_SAFE_INTEGER:ageB)||balB-balA;if(sortBy==='name_asc')return String(a.name||'').localeCompare(String(b.name||''),'ar');return balB-balA||ageB-ageA;});
   const count=document.getElementById('supplierCount');if(count)count.textContent=rows.length;
   const total=document.getElementById('supplierDebtTotal');if(total)total.textContent=money(rows.reduce((sum,s)=>sum+Number(s.balance||0),0));
   const branchId=state.supplierBranchId||'',category=state.categories.find(c=>c.id===categoryId);const scope=document.getElementById('supplierDebtScope');if(scope)scope.textContent=[branchId?'الفرع المحدد':'كل الفروع',category?category.name:'كل التصنيفات'].join(' · ');
