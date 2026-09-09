@@ -1462,7 +1462,7 @@ function supplierAgingBadge(days){
 async function suppliersView(main){
   const branchId=state.supplierBranchId||'',categoryId=state.supplierCategoryId||'';
   state.supplierRows=await api(branchId?`/api/suppliers?include_balance=true&branch_id=${encodeURIComponent(branchId)}`:'/api/suppliers?include_balance=true');
-  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-danger" id="resetSupplierValues">حذف القيم</button><button class="btn btn-soft" id="importSuppliers">استيراد CSV/Excel</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
+  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-danger" id="resetSupplierValues">حذف قيم الفرع</button><button class="btn btn-soft" id="importSuppliers">استيراد CSV/Excel</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
   <div class="toolbar supplier-toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."><select id="supplierBranchFilter" class="select">${branchOptions(true,false)}</select><select id="supplierCategoryFilter" class="select"><option value="">كل التصنيفات</option>${state.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><select id="supplierSortFilter" class="select"><option value="balance_desc">الأعلى قيمة</option><option value="balance_asc">الأقل قيمة</option><option value="aging_desc">أكبر Aging</option><option value="aging_asc">أقل Aging</option><option value="name_asc">الاسم أ-ي</option></select></div>
   <div class="supplier-debt-total"><div><span>إجمالي الدين المتبقي</span><small id="supplierDebtScope">${branchId?'للفرع المحدد':'لكل الفروع'}</small></div><strong class="money" id="supplierDebtTotal">${money(state.supplierRows.reduce((sum,s)=>sum+Number(s.balance||0),0))}</strong></div>
   <div id="supplierRows"></div>`;
@@ -1497,12 +1497,16 @@ function renderSupplierRows(){const box=document.getElementById('supplierRows');
 
 
 async function resetSupplierValuesModal(){
-  if(!confirmAction('تنبيه: سيتم حذف كل القيم المالية الحالية لكل الموردين مع بقاء أسماء الموردين. هل تريد المتابعة؟'))return;
-  const word=prompt('للتأكيد اكتب: حذف القيم');
+  const branchSelect=document.getElementById('supplierBranchFilter');
+  const branchId=state.supplierBranchId||branchSelect?.value||'';
+  if(!branchId){toast('اختر الفرع أولًا قبل حذف القيم',true);return;}
+  const branchName=branchSelect?.selectedOptions?.[0]?.textContent?.trim()||'الفرع المحدد';
+  if(!confirmAction(`تنبيه: سيتم حذف القيم المالية للفرع فقط: ${branchName}\nأسماء الموردين وباقي الفروع لن تتأثر. هل تريد المتابعة؟`))return;
+  const word=prompt(`للتأكيد اكتب: حذف القيم\nالفرع: ${branchName}`);
   if((word||'').trim()!=='حذف القيم'){toast('تم إلغاء العملية لأن نص التأكيد غير صحيح',true);return;}
   try{
-    const result=await api('/api/suppliers/reset-values',{method:'POST'});
-    toast(`تم حذف القيم: ${result.deleted_invoices||0} فاتورة، ${result.deleted_payments||0} سداد، ${result.deleted_payment_plans||0} خطة سداد`);
+    const result=await api('/api/suppliers/reset-values',{method:'POST',body:JSON.stringify({branch_id:branchId})});
+    toast(`تم حذف قيم فرع ${result.branch_name||branchName}: ${result.deleted_invoices||0} فاتورة، ${result.deleted_payments||0} سداد، ${result.deleted_payment_plans||0} خطة سداد`);
     await refreshSupplierRows();
   }catch(e){toast(e.message,true);}
 }

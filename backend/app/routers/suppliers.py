@@ -295,30 +295,47 @@ async def import_suppliers(data: SupplierImportInput, profile: dict[str, Any] = 
 
 
 @router.post("/reset-values")
-async def reset_supplier_values(profile: dict[str, Any] = Depends(current_profile)) -> Any:
-    """Delete financial values while keeping supplier names/master data.
+async def reset_supplier_values(data: SupplierResetValuesInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    """Delete financial values for one selected branch while keeping supplier names/master data.
 
-    This is designed for periodic external debt-report imports: old balances,
-    imported opening invoices, payments, allocations, and payment plans are
-    cleared, then a fresh supplier report can be imported into the same supplier
-    list without duplicating supplier names.
+    This is designed for periodic external debt-report imports per branch: old
+    balances, imported opening invoices, payments, allocations, and payment
+    plans are cleared only for the chosen branch, then a fresh supplier report
+    can be imported for that branch without affecting other branches.
     """
     require_permission(profile, "manage_suppliers")
+    require_branch_access(profile, data.branch_id)
+    branch = await sb("GET", "/rest/v1/branches", service=True, params={"select": "id,name", "id": f"eq.{data.branch_id}", "active": "eq.true", "limit": "1"})
+    if not branch:
+        raise HTTPException(422, "الفرع غير موجود أو موقوف")
 
-    existing_invoices = await sb("GET", "/rest/v1/invoices", service=True, params={"select": "id", "limit": "10000"})
-    existing_payments = await sb("GET", "/rest/v1/payments", service=True, params={"select": "id", "limit": "10000"})
-    existing_plans = await sb("GET", "/rest/v1/payment_plans", service=True, params={"select": "id", "limit": "10000"})
+    branch_filter = {"branch_id": f"eq.{data.branch_id}", "limit": "10000"}
+    existing_invoices = await sb("GET", "/rest/v1/invoices", service=True, params={"select": "id", **branch_filter})
+    existing_payments = await sb("GET", "/rest/v1/payments", service=True, params={"select": "id", **branch_filter})
+    existing_plans = await sb("GET", "/rest/v1/payment_plans", service=True, params={"select": "id", **branch_filter})
 
-    # Delete children/references first, then financial documents.
-    await sb("DELETE", "/rest/v1/payment_plans", service=True, params={"id": "not.is.null"})
-    await sb("DELETE", "/rest/v1/payment_allocations", service=True, params={"id": "not.is.null"})
-    await sb("DELETE", "/rest/v1/payments", service=True, params={"id": "not.is.null"})
-    await sb("DELETE", "/rest/v1/invoices", service=True, params={"id": "not.is.null"})
+    invoice_ids = [row.get("id") for row in existing_invoices or [] if row.get("id")]
+    payment_ids = [row.get("id") for row in existing_payments or [] if row.get("id")]
+
+    def chunks(values: list[str], size: int = 80):
+        for i in range(0, len(values), size):
+            yield values[i:i + size]
+
+    # Delete children/references for the selected branch first, then branch financial documents.
+    await sb("DELETE", "/rest/v1/payment_plans", service=True, params={"branch_id": f"eq.{data.branch_id}"})
+    for ids in chunks(payment_ids):
+        await sb("DELETE", "/rest/v1/payment_allocations", service=True, params={"payment_id": f"in.({','.join(ids)})"})
+    for ids in chunks(invoice_ids):
+        await sb("DELETE", "/rest/v1/payment_allocations", service=True, params={"invoice_id": f"in.({','.join(ids)})"})
+    await sb("DELETE", "/rest/v1/payments", service=True, params={"branch_id": f"eq.{data.branch_id}"})
+    await sb("DELETE", "/rest/v1/invoices", service=True, params={"branch_id": f"eq.{data.branch_id}"})
 
     return {
         "ok": True,
-        "deleted_invoices": len(existing_invoices or []),
-        "deleted_payments": len(existing_payments or []),
+        "branch_id": data.branch_id,
+        "branch_name": (branch[0] or {}).get("name"),
+        "deleted_invoices": len(invoice_ids),
+        "deleted_payments": len(payment_ids),
         "deleted_payment_plans": len(existing_plans or []),
     }
 

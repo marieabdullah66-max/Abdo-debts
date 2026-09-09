@@ -299,6 +299,10 @@ class SupplierImportInput(BaseModel):
     rows: list[SupplierImportRowInput] = Field(min_length=1, max_length=5000)
 
 
+class SupplierResetValuesInput(BaseModel):
+    branch_id: str
+
+
 class InvoiceInput(BaseModel):
     supplier_id: str
     branch_id: str
