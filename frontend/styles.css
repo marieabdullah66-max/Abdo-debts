@@ -175,3 +175,10 @@
 .report-main-daily-chart .doctor-daily-chart .line{stroke-width:3.5}
 .report-main-daily-chart .doctor-daily-chart .bars rect{fill:#d3e8e2}
 @media(max-width:700px){.report-builder-charts-head{margin-top:10px}.report-main-daily-chart .doctor-daily-chart-head h3{font-size:16px}}
+
+
+/* V63 - Friday labels in daily sales charts */
+.x-label tspan,.pdf-x-label tspan{dominant-baseline:hanging}
+.x-label.friday-date,.pdf-x-label.friday-date{text-anchor:middle}
+.x-label-friday{font-size:11px;fill:#0f7a5b;font-weight:700}
+.pdf-x-label-friday{font-size:8.5px;fill:#0f7a5b;font-weight:700}

@@ -363,13 +363,14 @@ function renderDoctorSalesCharts(data){
 }
 
 function renderDailySalesChart(rows,{title='المبيعات اليومية خلال الشهر',subtitle='رسم يومي لصافي المبيعات حسب أيام الفترة المختارة.',panelClass='doctor-daily-chart-panel',important=false}={}){
-  rows=(rows||[]).map(x=>({label:String(x.label||x.date||''),day:String(x.day||''),date:String(x.date||x.label||''),value:Number(x.value??x.net_sales??0)}));
+  rows=(rows||[]).map(x=>({label:String(x.label||x.date||''),day:String(x.day||''),date:String(x.date||x.label||''),iso_date:String(x.iso_date||''),value:Number(x.value??x.net_sales??0)}));
   if(!rows.length)return `<section class="panel ${esc(panelClass)}"><div class="empty">لا توجد بيانات يومية للرسم.</div></section>`;
   const sum=rows.reduce((a,x)=>a+x.value,0),active=rows.filter(x=>x.value>0).length;
   const best=rows.reduce((best,x)=>x.value>best.value?x:best,rows[0]||{value:0,label:'—'});
   const baseMax=3000,tickStep=500,highest=Math.max(baseMax,...rows.map(x=>x.value),0),yMax=Math.ceil(highest/tickStep)*tickStep;
   const tickValues=[];for(let v=0;v<=yMax;v+=tickStep)tickValues.push(v);
-  const width=Math.max(800,rows.length*46),height=important?300:270,padL=82,padR=20,padT=22,padB=46,innerW=width-padL-padR,innerH=height-padT-padB;
+  const hasFriday=rows.some(r=>chartRowDayMeta(r).friday);
+  const width=Math.max(800,rows.length*46),height=important?300:270,padL=82,padR=20,padT=22,padB=hasFriday?62:46,innerW=width-padL-padR,innerH=height-padT-padB;
   const y=v=>padT+innerH-((Math.max(0,Number(v||0))/Math.max(1,yMax))*innerH);
   const x=i=>padL+(rows.length<=1?innerW/2:(i*(innerW/(rows.length-1))));
   const points=rows.map((r,i)=>`${x(i).toFixed(1)},${y(r.value).toFixed(1)}`).join(' ');
@@ -377,10 +378,34 @@ function renderDailySalesChart(rows,{title='المبيعات اليومية خل
   const axisMoney=v=>`${Number(v||0).toLocaleString('en-US')} د.ل`;
   const ticks=tickValues.map(val=>{const yy=y(val);return `<g><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${width-padR}" y2="${yy.toFixed(1)}"/><text class="y-label" x="${padL-10}" y="${(yy+4).toFixed(1)}">${axisMoney(val)}</text></g>`;}).join('');
   const bars=rows.map((r,i)=>{const xx=x(i)-barW/2,yy=y(r.value),hh=(padT+innerH)-yy;return `<rect x="${xx.toFixed(1)}" y="${yy.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(2,hh).toFixed(1)}"><title>${esc(r.date||r.label)} — ${money(r.value)}</title></rect>`;}).join('');
-  const labels=rows.map((r,i)=>{const show=rows.length<=18||i%2===0||r.value===best.value;return show?`<text class="x-label" x="${x(i).toFixed(1)}" y="${height-18}">${esc(r.day||r.label)}</text>`:'';}).join('');
+  const labels=rows.map((r,i)=>renderScreenChartLabel(r,i,best,height,x(i),rows.length)).join('');
   const dots=rows.map((r,i)=>r.value>0?`<circle cx="${x(i).toFixed(1)}" cy="${y(r.value).toFixed(1)}" r="3.5"><title>${esc(r.date||r.label)} — ${money(r.value)}</title></circle>`:'').join('');
   return `<section class="panel ${panelClass} ${important?'report-main-daily-chart':''}"><div class="section-head doctor-daily-chart-head"><div><h3>${esc(title)}</h3><div class="muted">${esc(subtitle)}</div></div><div class="doctor-daily-chart-stats"><span>الإجمالي: <strong>${money(sum)}</strong></span><span>أيام نشطة: <strong>${Number(active).toLocaleString('en-US')}</strong></span><span>أعلى يوم: <strong>${esc(best.label)} · ${money(best.value)}</strong></span></div></div><div class="doctor-daily-chart-scroll"><svg class="doctor-daily-chart" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="${esc(title)}"><g class="grid">${ticks}</g><g class="bars">${bars}</g><polyline class="line" points="${points}"/><g class="dots">${dots}</g><g class="x-axis">${labels}</g></svg></div></section>`;
 }
+function chartRowDayMeta(row){
+  const iso=String(row?.iso_date||'').trim();
+  const d=iso?parseIsoDay(iso):null;
+  return {friday:!!(d&&d.getDay()===5), label:String(row?.day||row?.label||''), iso_date:iso};
+}
+function renderScreenChartLabel(row,index,best,height,xPos,total){
+  const meta=chartRowDayMeta(row);
+  const show=meta.friday||total<=18||index%2===0||row.value===best.value;
+  if(!show)return '';
+  if(meta.friday){
+    return `<text class="x-label friday-date" x="${xPos.toFixed(1)}" y="${height-28}"><tspan x="${xPos.toFixed(1)}" dy="0">${esc(meta.label)}</tspan><tspan class="x-label-friday" x="${xPos.toFixed(1)}" dy="14">الجمعة</tspan></text>`;
+  }
+  return `<text class="x-label" x="${xPos.toFixed(1)}" y="${height-16}">${esc(meta.label)}</text>`;
+}
+function renderPdfChartLabel(row,index,best,height,xPos,total){
+  const meta=chartRowDayMeta(row);
+  const show=meta.friday||total<=18||index%2===0||row.value===best.value;
+  if(!show)return '';
+  if(meta.friday){
+    return `<text class="pdf-x-label friday-date" x="${xPos.toFixed(1)}" y="${height-24}"><tspan x="${xPos.toFixed(1)}" dy="0">${esc(meta.label)}</tspan><tspan class="pdf-x-label-friday" x="${xPos.toFixed(1)}" dy="12">الجمعة</tspan></text>`;
+  }
+  return `<text class="pdf-x-label" x="${xPos.toFixed(1)}" y="${height-12}">${esc(meta.label)}</text>`;
+}
+
 function parseIsoDay(value){
   const m=String(value||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m)return null;
   return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
@@ -393,16 +418,16 @@ function buildPharmacyDailySalesRows(data){
   const start=parseIsoDay(data?.filter_start_iso||data?.available_start_iso),end=parseIsoDay(data?.filter_end_iso||data?.available_end_iso);
   if(start&&end&&start<=end){
     const rows=[];const cur=new Date(start.getTime());
-    while(cur<=end){const iso=formatIsoDay(cur);const display=formatDisplayDay(cur);rows.push({date:display,label:display,day:cur.getDate(),value:totals.get(iso)||totals.get(display)||0});cur.setDate(cur.getDate()+1);}
+    while(cur<=end){const iso=formatIsoDay(cur);const display=formatDisplayDay(cur);rows.push({date:display,label:display,day:cur.getDate(),iso_date:iso,value:totals.get(iso)||totals.get(display)||0});cur.setDate(cur.getDate()+1);}
     return rows;
   }
-  return Array.from(totals.entries()).map(([key,value])=>({date:key,label:key,day:key,value}));
+  return Array.from(totals.entries()).map(([key,value])=>({date:key,label:key,day:key,iso_date:parseIsoDay(key)?key:'',value}));
 }
 function renderPharmacyDailySalesChart(data){
   return renderDailySalesChart(buildPharmacyDailySalesRows(data),{title:'المبيعات اليومية للصيدلية',subtitle:'أهم شارت في التقرير: إجمالي صافي المبيعات اليومية للصيدلية خلال الفترة المختارة.',panelClass:'doctor-daily-chart-panel pharmacy-daily-chart-panel',important:true});
 }
 function renderDoctorDailySalesChart(doctor){
-  const rows=(doctor?.daily_sales||[]).map(x=>({label:String(x.label||x.date||''),day:String(x.day||''),date:String(x.date||''),value:Number(x.net_sales||0)}));
+  const rows=(doctor?.daily_sales||[]).map(x=>({label:String(x.label||x.date||''),day:String(x.day||''),date:String(x.date||''),iso_date:String(x.iso_date||''),value:Number(x.net_sales||0)}));
   return renderDailySalesChart(rows,{title:'المبيعات اليومية خلال الشهر',subtitle:'رسم يومي لصافي مبيعات الدكتور حسب أيام الفترة المختارة.',panelClass:'doctor-daily-chart-panel'});
 }
 function renderReportBuilderCharts(data){
@@ -411,19 +436,20 @@ function renderReportBuilderCharts(data){
 }
 
 function renderPdfDailySalesChart(rows,title,subtitle=''){
-  rows=(rows||[]).map(x=>({label:String(x.label||x.date||''),day:String(x.day||x.label||''),date:String(x.date||x.label||''),value:Number(x.value??x.net_sales??0)}));
+  rows=(rows||[]).map(x=>({label:String(x.label||x.date||''),day:String(x.day||x.label||''),date:String(x.date||x.label||''),iso_date:String(x.iso_date||''),value:Number(x.value??x.net_sales??0)}));
   if(!rows.length)return `<section class="section pdf-chart-section"><h2 class="section-title">${esc(title)}</h2><div class="note-box">لا توجد بيانات يومية للرسم.</div></section>`;
   const sum=rows.reduce((a,x)=>a+x.value,0),active=rows.filter(x=>x.value>0).length,best=rows.reduce((m,x)=>x.value>m.value?x:m,rows[0]||{value:0,label:'—'});
   const step=500,baseMax=3000,yMax=Math.ceil(Math.max(baseMax,...rows.map(x=>x.value),0)/step)*step;
   const ticks=[];for(let v=0;v<=yMax;v+=step)ticks.push(v);
-  const width=1040,height=270,padL=78,padR=18,padT=18,padB=40,innerW=width-padL-padR,innerH=height-padT-padB;
+  const hasFriday=rows.some(r=>chartRowDayMeta(r).friday);
+  const width=1040,height=hasFriday?284:270,padL=78,padR=18,padT=18,padB=hasFriday?54:40,innerW=width-padL-padR,innerH=height-padT-padB;
   const y=v=>padT+innerH-((Math.max(0,Number(v||0))/Math.max(1,yMax))*innerH),x=i=>padL+(rows.length<=1?innerW/2:(i*(innerW/(rows.length-1))));
   const barW=Math.max(7,Math.min(20,innerW/Math.max(1,rows.length)-8));
   const axis=v=>Number(v||0).toLocaleString('en-US');
   const grid=ticks.map(v=>{const yy=y(v);return `<g><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${width-padR}" y2="${yy.toFixed(1)}"/><text class="pdf-y-label" x="${padL-10}" y="${(yy+4).toFixed(1)}">${axis(v)}</text></g>`;}).join('');
   const bars=rows.map((r,i)=>{const yy=y(r.value),hh=padT+innerH-yy;return `<rect x="${(x(i)-barW/2).toFixed(1)}" y="${yy.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(2,hh).toFixed(1)}"/>`;}).join('');
   const points=rows.map((r,i)=>`${x(i).toFixed(1)},${y(r.value).toFixed(1)}`).join(' ');
-  const labels=rows.map((r,i)=>{const show=rows.length<=18||i%2===0||r.value===best.value;return show?`<text class="pdf-x-label" x="${x(i).toFixed(1)}" y="${height-14}">${esc(r.day||r.label)}</text>`:'';}).join('');
+  const labels=rows.map((r,i)=>renderPdfChartLabel(r,i,best,height,x(i),rows.length)).join('');
   return `<section class="section pdf-chart-section page-break"><h2 class="section-title">${esc(title)}</h2>${subtitle?`<div class="note-box">${esc(subtitle)}</div>`:''}<div class="pdf-chart-stats"><span>الإجمالي: <b>${money(sum)}</b></span><span>أيام نشطة: <b>${Number(active).toLocaleString('en-US')}</b></span><span>أعلى يوم: <b>${esc(best.label)} · ${money(best.value)}</b></span></div><svg class="pdf-daily-chart" viewBox="0 0 ${width} ${height}" width="100%" height="270" role="img"><g class="pdf-grid">${grid}</g><g class="pdf-bars">${bars}</g><polyline class="pdf-line" points="${points}"/><g>${labels}</g></svg></section>`;
 }
 function renderPdfBarChart(rows,metric,title,subtitle='',limit=8,formatter=money){
