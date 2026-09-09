@@ -263,6 +263,8 @@ async def import_suppliers(data: SupplierImportInput, profile: dict[str, Any] = 
             created += 1
         else:
             reused += 1
+            if row.reference_no:
+                await sb("PATCH", "/rest/v1/suppliers", service=True, params={"id": f"eq.{supplier['id']}"}, json={"notes": f"استيراد خارجي - ر.م: {row.reference_no}"})
 
         if round(float(row.balance or 0), 2) > 0:
             invoice_date = row.last_invoice_date or date.today()
@@ -288,6 +290,36 @@ async def import_suppliers(data: SupplierImportInput, profile: dict[str, Any] = 
         "invoices_created": invoices_created,
         "skipped": skipped,
         "rows": imported_rows[:50],
+    }
+
+
+
+@router.post("/reset-values")
+async def reset_supplier_values(profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    """Delete financial values while keeping supplier names/master data.
+
+    This is designed for periodic external debt-report imports: old balances,
+    imported opening invoices, payments, allocations, and payment plans are
+    cleared, then a fresh supplier report can be imported into the same supplier
+    list without duplicating supplier names.
+    """
+    require_permission(profile, "manage_suppliers")
+
+    existing_invoices = await sb("GET", "/rest/v1/invoices", service=True, params={"select": "id", "limit": "10000"})
+    existing_payments = await sb("GET", "/rest/v1/payments", service=True, params={"select": "id", "limit": "10000"})
+    existing_plans = await sb("GET", "/rest/v1/payment_plans", service=True, params={"select": "id", "limit": "10000"})
+
+    # Delete children/references first, then financial documents.
+    await sb("DELETE", "/rest/v1/payment_plans", service=True, params={"id": "not.is.null"})
+    await sb("DELETE", "/rest/v1/payment_allocations", service=True, params={"id": "not.is.null"})
+    await sb("DELETE", "/rest/v1/payments", service=True, params={"id": "not.is.null"})
+    await sb("DELETE", "/rest/v1/invoices", service=True, params={"id": "not.is.null"})
+
+    return {
+        "ok": True,
+        "deleted_invoices": len(existing_invoices or []),
+        "deleted_payments": len(existing_payments or []),
+        "deleted_payment_plans": len(existing_plans or []),
     }
 
 

@@ -1416,12 +1416,12 @@ function supplierAgingBadge(days){
 async function suppliersView(main){
   const branchId=state.supplierBranchId||'',categoryId=state.supplierCategoryId||'';
   state.supplierRows=await api(branchId?`/api/suppliers?include_balance=true&branch_id=${encodeURIComponent(branchId)}`:'/api/suppliers?include_balance=true');
-  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-soft" id="importSuppliers">استيراد CSV/Excel</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
+  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-danger" id="resetSupplierValues">حذف القيم</button><button class="btn btn-soft" id="importSuppliers">استيراد CSV/Excel</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
   <div class="toolbar supplier-toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."><select id="supplierBranchFilter" class="select">${branchOptions(true,false)}</select><select id="supplierCategoryFilter" class="select"><option value="">كل التصنيفات</option>${state.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
   <div class="supplier-debt-total"><div><span>إجمالي الدين المتبقي</span><small id="supplierDebtScope">${branchId?'للفرع المحدد':'لكل الفروع'}</small></div><strong class="money" id="supplierDebtTotal">${money(state.supplierRows.reduce((sum,s)=>sum+Number(s.balance||0),0))}</strong></div>
   <div id="supplierRows"></div>`;
   const branchSelect=document.getElementById('supplierBranchFilter'),categorySelect=document.getElementById('supplierCategoryFilter');branchSelect.value=branchId;categorySelect.value=categoryId;state.supplierCategoryId=categorySelect.value;
-  if(can('manage_suppliers')){document.getElementById('addSupplier').onclick=()=>supplierModal(null,async()=>refreshSupplierRows());document.getElementById('importSuppliers').onclick=()=>supplierImportModal();}
+  if(can('manage_suppliers')){document.getElementById('addSupplier').onclick=()=>supplierModal(null,async()=>refreshSupplierRows());document.getElementById('importSuppliers').onclick=()=>supplierImportModal();document.getElementById('resetSupplierValues').onclick=()=>resetSupplierValuesModal();}
   document.getElementById('supplierSearch').oninput=renderSupplierRows;
   categorySelect.onchange=()=>{state.supplierCategoryId=categorySelect.value;renderSupplierRows();};
   branchSelect.onchange=async()=>{state.supplierBranchId=branchSelect.value;await refreshSupplierRows();};
@@ -1446,6 +1446,18 @@ function renderSupplierRows(){const box=document.getElementById('supplierRows');
   box.querySelectorAll('[data-summary]').forEach(b=>b.onclick=()=>supplierSummaryModal(b.dataset.summary));
   box.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>supplierModal(state.suppliers.find(s=>s.id===b.dataset.edit)||state.supplierRows.find(s=>s.id===b.dataset.edit),async()=>refreshSupplierRows()));
   box.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف المورد؟'))return;try{await api(`/api/suppliers/${b.dataset.delete}`,{method:'DELETE'});state.suppliers=await api('/api/suppliers');toast('تم حذف المورد');await refreshSupplierRows();}catch(e){toast(e.message,true);}});
+}
+
+
+async function resetSupplierValuesModal(){
+  if(!confirmAction('تنبيه: سيتم حذف كل القيم المالية الحالية لكل الموردين مع بقاء أسماء الموردين. هل تريد المتابعة؟'))return;
+  const word=prompt('للتأكيد اكتب: حذف القيم');
+  if((word||'').trim()!=='حذف القيم'){toast('تم إلغاء العملية لأن نص التأكيد غير صحيح',true);return;}
+  try{
+    const result=await api('/api/suppliers/reset-values',{method:'POST'});
+    toast(`تم حذف القيم: ${result.deleted_invoices||0} فاتورة، ${result.deleted_payments||0} سداد، ${result.deleted_payment_plans||0} خطة سداد`);
+    await refreshSupplierRows();
+  }catch(e){toast(e.message,true);}
 }
 
 function supplierImportModal(){
