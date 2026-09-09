@@ -137,3 +137,8 @@
 @media(max-width:700px){.report-builder-manual{grid-template-columns:1fr}}
 .report-drafts-panel{margin-bottom:12px}.report-drafts-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.report-drafts-list{display:grid;gap:8px}.draft-card{display:flex;justify-content:space-between;align-items:center;border:1px solid var(--line);border-radius:12px;padding:9px;background:#fbfefd}.draft-card div:first-child{display:grid;gap:3px}.draft-card small{font-size:10px;color:var(--muted)}.draft-card div:last-child{display:flex;gap:6px}
 @media(max-width:600px){.draft-card{display:grid;gap:8px}.draft-card div:last-child .btn{flex:1}}
+
+
+/* V52 — Supplier external CSV import */
+.supplier-import-box{display:grid;gap:12px}.supplier-import-summary{background:var(--soft,#eef8f6);border:1px solid var(--line,#dce7e5);border-radius:14px;padding:12px;font-weight:700}.supplier-import-table{overflow:auto;max-height:55vh;border:1px solid var(--line,#dce7e5);border-radius:14px}.supplier-import-table table{min-width:900px}.supplier-import-table th{position:sticky;top:0;z-index:2}.supplier-import-table input{min-width:120px}.supplier-import-table .supplierImportName{min-width:220px}.supplier-import-table .supplierImportInclude{min-width:auto;width:20px;height:20px}
+@media(max-width:720px){.supplier-import-table{max-height:58dvh}.supplier-import-table table{min-width:760px}.page-head-actions{flex-wrap:wrap}.page-head-actions .btn{flex:1 1 auto}}

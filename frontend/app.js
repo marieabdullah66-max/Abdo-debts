@@ -1416,12 +1416,12 @@ function supplierAgingBadge(days){
 async function suppliersView(main){
   const branchId=state.supplierBranchId||'',categoryId=state.supplierCategoryId||'';
   state.supplierRows=await api(branchId?`/api/suppliers?include_balance=true&branch_id=${encodeURIComponent(branchId)}`:'/api/suppliers?include_balance=true');
-  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
+  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-soft" id="importSuppliers">استيراد ملف</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
   <div class="toolbar supplier-toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."><select id="supplierBranchFilter" class="select">${branchOptions(true,false)}</select><select id="supplierCategoryFilter" class="select"><option value="">كل التصنيفات</option>${state.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
   <div class="supplier-debt-total"><div><span>إجمالي الدين المتبقي</span><small id="supplierDebtScope">${branchId?'للفرع المحدد':'لكل الفروع'}</small></div><strong class="money" id="supplierDebtTotal">${money(state.supplierRows.reduce((sum,s)=>sum+Number(s.balance||0),0))}</strong></div>
   <div id="supplierRows"></div>`;
   const branchSelect=document.getElementById('supplierBranchFilter'),categorySelect=document.getElementById('supplierCategoryFilter');branchSelect.value=branchId;categorySelect.value=categoryId;state.supplierCategoryId=categorySelect.value;
-  if(can('manage_suppliers'))document.getElementById('addSupplier').onclick=()=>supplierModal(null,async()=>refreshSupplierRows());
+  if(can('manage_suppliers')){document.getElementById('addSupplier').onclick=()=>supplierModal(null,async()=>refreshSupplierRows());document.getElementById('importSuppliers').onclick=()=>supplierImportModal();}
   document.getElementById('supplierSearch').oninput=renderSupplierRows;
   categorySelect.onchange=()=>{state.supplierCategoryId=categorySelect.value;renderSupplierRows();};
   branchSelect.onchange=async()=>{state.supplierBranchId=branchSelect.value;await refreshSupplierRows();};
@@ -1447,6 +1447,51 @@ function renderSupplierRows(){const box=document.getElementById('supplierRows');
   box.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>supplierModal(state.suppliers.find(s=>s.id===b.dataset.edit)||state.supplierRows.find(s=>s.id===b.dataset.edit),async()=>refreshSupplierRows()));
   box.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف المورد؟'))return;try{await api(`/api/suppliers/${b.dataset.delete}`,{method:'DELETE'});state.suppliers=await api('/api/suppliers');toast('تم حذف المورد');await refreshSupplierRows();}catch(e){toast(e.message,true);}});
 }
+
+function supplierImportModal(){
+  let previewRows=[];
+  const wrap=showModal('استيراد موردين من ملف خارجي',`<div class="supplier-import-box"><div class="form-grid"><div class="field"><label>الفرع الذي ستُسجل عليه الأرصدة *</label><select class="select" id="supplierImportBranch" required><option value="">— اختر الفرع —</option>${branchOptions(false,false)}</select></div><div class="field"><label>ملف CSV *</label><input class="input" id="supplierImportFile" type="file" accept=".csv,text/csv,application/vnd.ms-excel"></div></div><button class="btn btn-soft" type="button" id="previewSupplierImport">قراءة الملف</button><div class="hint">لن تتم الإضافة مباشرة. بعد القراءة ستظهر الأسماء والأرصدة لتعديلها أو حذف أي صف قبل التأكيد.</div><div id="supplierImportPreview"><div class="empty">اختر الملف ثم اضغط قراءة الملف.</div></div></div>`,async()=>{
+    const branchId=document.getElementById('supplierImportBranch')?.value||'';
+    if(!branchId){toast('اختر الفرع أولًا',true);return false;}
+    const rows=collectSupplierImportRows();
+    if(!rows.length){toast('لا توجد صفوف للاستيراد',true);return false;}
+    if(!confirmAction(`تأكيد استيراد ${rows.length} مورد/رصيد للفرع المحدد؟`))return false;
+    const result=await api('/api/suppliers/import',{method:'POST',body:JSON.stringify({branch_id:branchId,rows})});
+    toast(`تم الاستيراد: ${result.created_suppliers} مورد جديد، ${result.existing_suppliers} موجود، ${result.invoices_created} فاتورة رصيد`);
+    await refreshSupplierRows();
+    return true;
+  },{large:true,saveText:'تأكيد الاستيراد'});
+  const previewBtn=wrap.querySelector('#previewSupplierImport');
+  previewBtn.onclick=async()=>{
+    const file=wrap.querySelector('#supplierImportFile')?.files?.[0];
+    if(!file){toast('اختر ملف CSV أولًا',true);return;}
+    previewBtn.disabled=true;previewBtn.textContent='جاري قراءة الملف...';
+    try{
+      const body=new FormData();body.append('file',file);
+      const data=await api('/api/suppliers/import/preview',{method:'POST',body});
+      previewRows=data.rows||[];
+      renderSupplierImportPreview(wrap,previewRows);
+    }catch(e){toast(e.message,true);}
+    finally{previewBtn.disabled=false;previewBtn.textContent='قراءة الملف';}
+  };
+}
+function renderSupplierImportPreview(wrap,rows){
+  const box=wrap.querySelector('#supplierImportPreview');
+  if(!rows.length){box.innerHTML='<div class="empty">لم يتم العثور على موردين صالحين في الملف.</div>';return;}
+  box.innerHTML=`<div class="supplier-import-summary">تم استخراج <b>${rows.length}</b> صف. عدّل الاسم أو الرصيد أو احذف أي صف قبل التأكيد.</div><div class="supplier-import-table"><table><thead><tr><th>استيراد</th><th>اسم المورد</th><th>ر.م</th><th>الرصيد</th><th>آخر سداد</th><th>آخر فاتورة</th><th></th></tr></thead><tbody>${rows.map((r,i)=>`<tr data-import-row><td><input type="checkbox" class="supplierImportInclude" checked></td><td><input class="input supplierImportName" value="${esc(r.name||'')}" required></td><td><input class="input supplierImportRef" value="${esc(r.reference_no||'')}"></td><td><input class="input supplierImportBalance" type="number" min="0" step="0.01" value="${Number(r.balance||0)}"></td><td><input class="input supplierImportPaid" type="date" value="${esc(r.last_payment_date||'')}"></td><td><input class="input supplierImportInvoice" type="date" value="${esc(r.last_invoice_date||'')}"></td><td><button class="btn btn-danger btn-sm" type="button" onclick="this.closest('[data-import-row]').remove();updateSupplierImportCount()">حذف</button></td></tr>`).join('')}</tbody></table></div><div class="hint" id="supplierImportCount">${rows.length} صف جاهز للاستيراد</div>`;
+}
+function collectSupplierImportRows(){
+  return [...document.querySelectorAll('[data-import-row]')].map(row=>({
+    include:row.querySelector('.supplierImportInclude')?.checked!==false,
+    name:(row.querySelector('.supplierImportName')?.value||'').trim(),
+    reference_no:(row.querySelector('.supplierImportRef')?.value||'').trim()||null,
+    balance:Number(row.querySelector('.supplierImportBalance')?.value||0),
+    last_payment_date:row.querySelector('.supplierImportPaid')?.value||null,
+    last_invoice_date:row.querySelector('.supplierImportInvoice')?.value||null,
+  })).filter(r=>r.include&&r.name.length>=2);
+}
+function updateSupplierImportCount(){const el=document.getElementById('supplierImportCount');if(el)el.textContent=`${collectSupplierImportRows().length} صف جاهز للاستيراد`;}
+
 function supplierModal(s=null,onSaved=null){const selected=new Set((s?.categories||[]).map(c=>c.id));showModal(`${s?'تعديل':'إضافة'} مورد`,`<form id="supplierForm"><div class="field"><label>اسم المورد *</label><input class="input" name="name" required value="${esc(s?.name||'')}"></div><div class="field"><label>الهاتف</label><input class="input" name="phone" value="${esc(s?.phone||'')}"></div><div class="field"><label>التصنيفات</label><div class="category-picks">${state.categories.length?state.categories.map(c=>`<label><input type="checkbox" name="category_ids" value="${c.id}" ${selected.has(c.id)?'checked':''}> ${esc(c.name)}</label>`).join(''):'<div class="hint">لا توجد تصنيفات بعد. أضفها من الإعدادات.</div>'}</div><div class="hint">يمكن اختيار أكثر من تصنيف للمورد.</div></div><div class="field"><label>ملاحظات</label><textarea class="textarea" name="notes">${esc(s?.notes||'')}</textarea></div></form>`,async()=>{const f=document.getElementById('supplierForm');if(!f.reportValidity())return false;const fd=new FormData(f);const payload={name:fd.get('name'),phone:fd.get('phone')||null,notes:fd.get('notes')||null,category_ids:[...f.querySelectorAll('input[name="category_ids"]:checked')].map(x=>x.value)};const saved=await api(s?`/api/suppliers/${s.id}`:'/api/suppliers',{method:s?'PUT':'POST',body:JSON.stringify(payload)});state.suppliers=await api('/api/suppliers');toast('تم حفظ المورد');if(onSaved)await onSaved(saved);return true;});}
 async function supplierSummaryModal(id){try{const d=await api(`/api/suppliers/${id}/summary`);showModal(`كشف ${d.supplier.name}`,`<div class="supplier-summary"><div><small>الفواتير</small><strong>${money(d.totals.invoiced)}</strong></div><div><small>المسدد</small><strong>${money(d.totals.paid)}</strong></div><div><small>المتبقي</small><strong>${money(d.totals.balance)}</strong></div></div><h4>حسب الفروع</h4><div class="mini-list">${d.by_branch.map(x=>`<div class="mini-row"><span>${esc(x.branch_name)}</span><span class="money">${money(x.balance)}</span></div>`).join('')||'<div class="empty">لا توجد فواتير</div>'}</div><h4>الفواتير</h4><div class="allocation-list">${d.invoices.map(i=>`<div class="allocation-row" style="grid-template-columns:1fr 130px"><div class="desc"><strong>فاتورة ${esc(i.invoice_number)}</strong>${esc((i.branches||{}).name)} — ${esc(i.invoice_date)}</div><div>${statusBadge(i.status)}<div class="money">${money(i.balance)}</div></div></div>`).join('')}</div>`,null,{saveText:null,large:true});}catch(e){toast(e.message,true);}}
 
