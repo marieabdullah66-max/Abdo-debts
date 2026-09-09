@@ -6,7 +6,7 @@ import unicodedata
 from collections import defaultdict
 from statistics import median, pstdev
 from typing import Any
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
@@ -508,6 +508,33 @@ def analyze_doctor_sales_rows(
             reverse=True,
         )
 
+        daily_sales_rows: list[dict[str, Any]] = []
+        if selected_start and selected_end:
+            current_day = selected_start
+            while current_day <= selected_end:
+                key = current_day.strftime("%d/%m/%Y")
+                daily_sales_rows.append({
+                    "date": key,
+                    "iso_date": current_day.isoformat(),
+                    "day": current_day.day,
+                    "label": current_day.strftime("%d/%m"),
+                    "net_sales": round(float(bucket["daily_sales"].get(key, 0.0)), 3),
+                })
+                current_day += timedelta(days=1)
+        else:
+            for key, value in sorted(
+                bucket["daily_sales"].items(),
+                key=lambda item: _parse_report_date(item[0]) or date.max,
+            ):
+                parsed = _parse_report_date(key)
+                daily_sales_rows.append({
+                    "date": key,
+                    "iso_date": parsed.isoformat() if parsed else "",
+                    "day": parsed.day if parsed else key,
+                    "label": parsed.strftime("%d/%m") if parsed else key,
+                    "net_sales": round(float(value), 3),
+                })
+
         result_doctors.append({
             "doctor_key": doctor_key,
             "doctor": bucket["doctor"],
@@ -531,6 +558,7 @@ def analyze_doctor_sales_rows(
             "boxes_quantity": round(float(bucket["boxes_quantity"]), 2),
             "loose_quantity": round(float(bucket["loose_quantity"]), 2),
             "top_items": top_items[:50],
+            "daily_sales": daily_sales_rows,
             "invoices": doctor_invoices,
         })
 

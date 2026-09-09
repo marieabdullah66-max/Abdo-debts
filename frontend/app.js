@@ -362,6 +362,23 @@ function renderDoctorSalesCharts(data){
   return `<section class="panel doctor-charts-panel"><div class="section-head doctor-charts-head"><div><h3>Charts مبيعات الدكاترة</h3><div class="muted">قراءة سريعة للأعلى مبيعًا، الأكثر فواتير، أعلى KPI، ونسبة مساهمة كل دكتور من الصافي.</div></div><span class="badge badge-green">تتحدث حسب الفترة المختارة</span></div><div class="doctor-charts-grid"><div class="doctor-chart-card doctor-chart-wide"><div class="doctor-chart-title"><strong>أعلى الدكاترة حسب صافي المبيعات</strong><small>Net Sales</small></div>${doctorChartRows(rows,'net_sales','صافي')}</div><div class="doctor-chart-card"><div class="doctor-chart-title"><strong>نسبة المساهمة من الصافي</strong><small>Top 5 + الباقي</small></div>${renderDoctorShareChart(rows)}</div><div class="doctor-chart-card"><div class="doctor-chart-title"><strong>الأكثر فواتير</strong><small>Invoice Count</small></div>${doctorChartRows(rows,'invoice_count','فاتورة',8,x=>Number(x||0).toLocaleString('en-US'))}</div><div class="doctor-chart-card doctor-chart-wide"><div class="doctor-chart-title"><strong>أعلى KPI</strong><small>تقييم الأداء العام</small></div>${doctorKpiChartRows(rows)}</div></div></section>`;
 }
 
+function renderDoctorDailySalesChart(doctor){
+  const rows=(doctor?.daily_sales||[]).map(x=>({label:String(x.label||x.date||''),day:String(x.day||''),date:String(x.date||''),value:Number(x.net_sales||0)}));
+  if(!rows.length)return '<section class="panel doctor-daily-chart-panel"><div class="empty">لا توجد بيانات يومية للرسم.</div></section>';
+  const max=Math.max(...rows.map(x=>x.value),0),sum=rows.reduce((a,x)=>a+x.value,0),active=rows.filter(x=>x.value>0).length;
+  const best=rows.reduce((best,x)=>x.value>best.value?x:best,rows[0]||{value:0,label:'—'});
+  const width=Math.max(760,rows.length*44),height=260,padL=54,padR=20,padT=22,padB=46,innerW=width-padL-padR,innerH=height-padT-padB;
+  const y=v=>max>0?padT+innerH-((v/max)*innerH):padT+innerH;
+  const x=i=>padL+(rows.length<=1?innerW/2:(i*(innerW/(rows.length-1))));
+  const points=rows.map((r,i)=>`${x(i).toFixed(1)},${y(r.value).toFixed(1)}`).join(' ');
+  const barW=Math.max(8,Math.min(22,innerW/Math.max(1,rows.length)-10));
+  const ticks=[0,.25,.5,.75,1].map(t=>{const val=max*t,yy=y(val);return `<g><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${width-padR}" y2="${yy.toFixed(1)}"/><text x="${padL-8}" y="${(yy+4).toFixed(1)}">${money(val)}</text></g>`;}).join('');
+  const bars=rows.map((r,i)=>{const xx=x(i)-barW/2,yy=y(r.value),hh=(padT+innerH)-yy;return `<rect x="${xx.toFixed(1)}" y="${yy.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(2,hh).toFixed(1)}"><title>${esc(r.date||r.label)} — ${money(r.value)}</title></rect>`;}).join('');
+  const labels=rows.map((r,i)=>{const show=rows.length<=18||i%2===0||r.value===best.value;return show?`<text class="x-label" x="${x(i).toFixed(1)}" y="${height-18}">${esc(r.day||r.label)}</text>`:'';}).join('');
+  const dots=rows.map((r,i)=>r.value>0?`<circle cx="${x(i).toFixed(1)}" cy="${y(r.value).toFixed(1)}" r="3.5"><title>${esc(r.date||r.label)} — ${money(r.value)}</title></circle>`:'').join('');
+  return `<section class="panel doctor-daily-chart-panel"><div class="section-head doctor-daily-chart-head"><div><h3>المبيعات اليومية خلال الشهر</h3><div class="muted">رسم يومي لصافي مبيعات الدكتور حسب أيام الفترة المختارة.</div></div><div class="doctor-daily-chart-stats"><span>الإجمالي: <strong>${money(sum)}</strong></span><span>أيام نشطة: <strong>${Number(active).toLocaleString('en-US')}</strong></span><span>أعلى يوم: <strong>${esc(best.label)} · ${money(best.value)}</strong></span></div></div><div class="doctor-daily-chart-scroll"><svg class="doctor-daily-chart" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="المبيعات اليومية خلال الشهر"><g class="grid">${ticks}</g><g class="bars">${bars}</g><polyline class="line" points="${points}"/><g class="dots">${dots}</g><g class="x-axis">${labels}</g></svg></div></section>`;
+}
+
 function doctorSalesFilteredRows(){
   const data=state.doctorSalesAnalysis;if(!data)return [];
   const q=String(state.doctorSalesSearch||'').trim().toLowerCase();
@@ -491,6 +508,7 @@ function renderDoctorSalesDetail(main,doctor){
   const topItems=(doctor.top_items||[]).slice(0,50),invoices=(doctor.invoices||[]).filter(x=>Number(x.net_total||0)>100).sort((a,b)=>Number(b.net_total||0)-Number(a.net_total||0));
   main.innerHTML=`<div class="page-head doctor-sales-detail-head"><div><button class="btn btn-soft btn-sm" id="doctorSalesBack">← رجوع لمبيعات الدكاترة</button><h2>${esc(doctor.doctor)}</h2><div class="muted">تفاصيل المبيعات النقدية خلال ${esc(state.doctorSalesAnalysis?.period_start||'—')} ← ${esc(state.doctorSalesAnalysis?.period_end||'—')}</div></div><div class="page-head-actions"><button class="btn btn-primary btn-sm" id="doctorDetailPdfExport">🧾 تصدير PDF</button></div></div>
   ${renderDoctorKpiSummary(doctor)}
+  ${renderDoctorDailySalesChart(doctor)}
   <div class="doctor-sales-summary doctor-detail-summary">
     <div class="stat"><div class="label">صافي المبيعات</div><div class="value">${money(doctor.net_sales)}</div></div>
     <div class="stat"><div class="label">عدد الفواتير</div><div class="value">${Number(doctor.invoice_count||0).toLocaleString('en-US')}</div></div>
