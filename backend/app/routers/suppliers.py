@@ -5,9 +5,15 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, File, UploadFile
+from openpyxl import load_workbook
 from ..core import *
+from ..xls_biff import read_first_sheet_rows
 
 router = APIRouter(prefix="/api/suppliers", tags=["suppliers"])
+
+MAX_SUPPLIER_IMPORT_BYTES = 12 * 1024 * 1024
+MAX_SUPPLIER_IMPORT_ROWS = 5000
+MAX_SUPPLIER_IMPORT_COLS = 40
 
 
 def _clean_text(value: Any) -> str:
@@ -44,49 +50,92 @@ def _looks_like_date(value: str) -> bool:
     return _parse_date(value) is not None
 
 
+def _supplier_import_row(cells: list[Any], idx: int) -> dict[str, Any] | None:
+    cells = [_clean_text(x) for x in cells]
+    if not cells:
+        return None
+
+    # CSV export: labels repeat inside every row. Useful cells are fixed.
+    if len(cells) > 17 and (cells[6] == "الرصيد" or cells[7] == "اسم الزبون" or cells[8] == "ر.م"):
+        name = cells[13] if len(cells) > 13 else ""
+        reference_no = cells[14] if len(cells) > 14 else ""
+        balance = _parse_money(cells[12] if len(cells) > 12 else "")
+        last_payment_date = _parse_date(cells[16] if len(cells) > 16 else "")
+        last_invoice_date = _parse_date(cells[17] if len(cells) > 17 else "")
+    # XLS export from Crystal Reports: first visible columns are labels, then
+    # data appears as: ... الرصيد, اسم الزبون, ر.م, ..., تاريخ آخر سداد, تاريخ آخر فاتورة.
+    elif len(cells) >= 6:
+        name = cells[4] if len(cells) > 4 else ""
+        reference_no = cells[5] if len(cells) > 5 else ""
+        balance = _parse_money(cells[3] if len(cells) > 3 else "")
+        last_payment_date = _parse_date(cells[7] if len(cells) > 7 else "")
+        last_invoice_date = _parse_date(cells[8] if len(cells) > 8 else "")
+    else:
+        return None
+
+    # Fallback: choose a likely supplier name from the later cells.
+    if not name or name in {".", "غيرمحدد", "اسم الزبون"} or _looks_like_date(name) or re.fullmatch(r"[0-9.,\-]+", name or ""):
+        for c in cells[4:]:
+            if not c or c in {".", "غيرمحدد", "الاجمالي :", "اسم الزبون", "ر.م"}:
+                continue
+            if _looks_like_date(c) or re.fullmatch(r"[0-9.,\-]+", c):
+                continue
+            name = c
+            break
+
+    if not name or name in {".", "غيرمحدد", "اسم الزبون"}:
+        return None
+
+    return {
+        "source_row": idx,
+        "name": name[:160],
+        "reference_no": reference_no[:100] or None,
+        "balance": round(balance, 2),
+        "last_payment_date": last_payment_date.isoformat() if last_payment_date else None,
+        "last_invoice_date": last_invoice_date.isoformat() if last_invoice_date else None,
+        "include": True,
+    }
+
+
+def _parse_supplier_rows(source_rows: list[list[Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for idx, row in enumerate(source_rows, start=1):
+        parsed = _supplier_import_row(row, idx)
+        if parsed:
+            rows.append(parsed)
+    return rows
+
+
 def _parse_supplier_csv_rows(text: str) -> list[dict[str, Any]]:
     sample = text[:4096]
     try:
         dialect = csv.Sniffer().sniff(sample)
     except csv.Error:
         dialect = csv.excel
-    rows: list[dict[str, Any]] = []
-    for idx, row in enumerate(csv.reader(io.StringIO(text), dialect), start=1):
-        if not row or len(row) < 8:
-            continue
-        cells = [_clean_text(x) for x in row]
+    return _parse_supplier_rows(list(csv.reader(io.StringIO(text), dialect)))
 
-        # The common exported customer/supplier report repeats header labels in
-        # each row. In that file the useful data is at fixed positions.
-        name = cells[13] if len(cells) > 13 else ""
-        reference_no = cells[14] if len(cells) > 14 else ""
-        balance = _parse_money(cells[12] if len(cells) > 12 else "")
-        last_payment_date = _parse_date(cells[16] if len(cells) > 16 else "")
-        last_invoice_date = _parse_date(cells[17] if len(cells) > 17 else "")
 
-        # Fallback for slightly different exports: try the cells after the
-        # repeated labels and choose a human name, not dates/numbers/placeholders.
-        if not name or name in {".", "غيرمحدد"} or _looks_like_date(name) or re.fullmatch(r"[0-9.,\-]+", name or ""):
-            candidates = cells[8:]
-            for c in candidates:
-                if not c or c in {".", "غيرمحدد", "الاجمالي :"}:
-                    continue
-                if _looks_like_date(c) or re.fullmatch(r"[0-9.,\-]+", c):
-                    continue
-                name = c
-                break
-        if not name or name in {".", "غيرمحدد"}:
-            continue
-        rows.append({
-            "source_row": idx,
-            "name": name[:160],
-            "reference_no": reference_no[:100] or None,
-            "balance": round(balance, 2),
-            "last_payment_date": last_payment_date.isoformat() if last_payment_date else None,
-            "last_invoice_date": last_invoice_date.isoformat() if last_invoice_date else None,
-            "include": True,
-        })
-    return rows
+def _parse_supplier_xlsx_rows(raw: bytes) -> list[dict[str, Any]]:
+    try:
+        wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        ws = wb[wb.sheetnames[0]]
+        sheet_rows = []
+        for row in ws.iter_rows(max_row=MAX_SUPPLIER_IMPORT_ROWS + 10, max_col=MAX_SUPPLIER_IMPORT_COLS, values_only=True):
+            values = list(row or [])
+            while values and (values[-1] is None or _clean_text(values[-1]) == ""):
+                values.pop()
+            sheet_rows.append(values)
+        return _parse_supplier_rows(sheet_rows)
+    except Exception as exc:
+        raise HTTPException(422, "تعذر قراءة ملف .xlsx") from exc
+
+
+def _parse_supplier_xls_rows(raw: bytes) -> list[dict[str, Any]]:
+    try:
+        source_rows = read_first_sheet_rows(raw, max_rows=MAX_SUPPLIER_IMPORT_ROWS + 10, max_cols=MAX_SUPPLIER_IMPORT_COLS)
+        return _parse_supplier_rows(source_rows)
+    except Exception as exc:
+        raise HTTPException(422, "تعذر قراءة ملف .xls") from exc
 
 
 async def _unique_import_invoice_number(supplier_id: str, base: str) -> str:
@@ -147,24 +196,31 @@ async def _replace_supplier_categories(supplier_id: str, category_ids: list[str]
 @router.post("/import/preview")
 async def preview_supplier_import(file: UploadFile = File(...), profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "manage_suppliers")
-    raw = await file.read()
-    if len(raw) > 5 * 1024 * 1024:
-        raise HTTPException(413, "حجم الملف كبير جدًا")
+    raw = await file.read(MAX_SUPPLIER_IMPORT_BYTES + 1)
+    if len(raw) > MAX_SUPPLIER_IMPORT_BYTES:
+        raise HTTPException(413, "حجم الملف كبير جدًا؛ الحد الأقصى 12 MB")
+    if not raw:
+        raise HTTPException(422, "الملف فارغ")
     name = (file.filename or "").lower()
-    if name.endswith(".csv") or file.content_type in {"text/csv", "application/csv", "application/vnd.ms-excel"}:
-        text = None
+    content_type = (file.content_type or "").lower()
+    if name.endswith(".xls"):
+        rows = _parse_supplier_xls_rows(raw)
+    elif name.endswith(".xlsx"):
+        rows = _parse_supplier_xlsx_rows(raw)
+    elif name.endswith(".csv") or content_type in {"text/csv", "application/csv", "application/vnd.ms-excel"}:
+        decoded = None
         for enc in ("utf-8-sig", "utf-8", "cp1256", "windows-1256", "latin-1"):
             try:
-                text = raw.decode(enc)
+                decoded = raw.decode(enc)
                 break
             except UnicodeDecodeError:
                 pass
-        if text is None:
+        if decoded is None:
             raise HTTPException(422, "تعذر قراءة ملف CSV")
-        rows = _parse_supplier_csv_rows(text)
+        rows = _parse_supplier_csv_rows(decoded)
     else:
-        raise HTTPException(422, "الاستيراد يدعم ملف CSV حاليًا")
-    return {"rows": rows[:5000], "total_rows": len(rows), "filename": file.filename}
+        raise HTTPException(422, "الاستيراد يدعم CSV و Excel بصيغة .xls أو .xlsx")
+    return {"rows": rows[:MAX_SUPPLIER_IMPORT_ROWS], "total_rows": len(rows), "filename": file.filename}
 
 
 @router.post("/import")

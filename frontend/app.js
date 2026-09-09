@@ -1416,7 +1416,7 @@ function supplierAgingBadge(days){
 async function suppliersView(main){
   const branchId=state.supplierBranchId||'',categoryId=state.supplierCategoryId||'';
   state.supplierRows=await api(branchId?`/api/suppliers?include_balance=true&branch_id=${encodeURIComponent(branchId)}`:'/api/suppliers?include_balance=true');
-  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-soft" id="importSuppliers">استيراد ملف</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
+  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-soft" id="importSuppliers">استيراد CSV/Excel</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
   <div class="toolbar supplier-toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."><select id="supplierBranchFilter" class="select">${branchOptions(true,false)}</select><select id="supplierCategoryFilter" class="select"><option value="">كل التصنيفات</option>${state.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
   <div class="supplier-debt-total"><div><span>إجمالي الدين المتبقي</span><small id="supplierDebtScope">${branchId?'للفرع المحدد':'لكل الفروع'}</small></div><strong class="money" id="supplierDebtTotal">${money(state.supplierRows.reduce((sum,s)=>sum+Number(s.balance||0),0))}</strong></div>
   <div id="supplierRows"></div>`;
@@ -1450,7 +1450,7 @@ function renderSupplierRows(){const box=document.getElementById('supplierRows');
 
 function supplierImportModal(){
   let previewRows=[];
-  const wrap=showModal('استيراد موردين من ملف خارجي',`<div class="supplier-import-box"><div class="form-grid"><div class="field"><label>الفرع الذي ستُسجل عليه الأرصدة *</label><select class="select" id="supplierImportBranch" required><option value="">— اختر الفرع —</option>${branchOptions(false,false)}</select></div><div class="field"><label>ملف CSV *</label><input class="input" id="supplierImportFile" type="file" accept=".csv,text/csv,application/vnd.ms-excel"></div></div><button class="btn btn-soft" type="button" id="previewSupplierImport">قراءة الملف</button><div class="hint">لن تتم الإضافة مباشرة. بعد القراءة ستظهر الأسماء والأرصدة لتعديلها أو حذف أي صف قبل التأكيد.</div><div id="supplierImportPreview"><div class="empty">اختر الملف ثم اضغط قراءة الملف.</div></div></div>`,async()=>{
+  const wrap=showModal('استيراد موردين من ملف خارجي',`<div class="supplier-import-box"><div class="form-grid"><div class="field"><label>الفرع الذي ستُسجل عليه الأرصدة *</label><select class="select" id="supplierImportBranch" required><option value="">— اختر الفرع —</option>${branchOptions(false,false)}</select></div><div class="field"><label>ملف CSV أو Excel *</label><input class="input" id="supplierImportFile" type="file" accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></div></div><button class="btn btn-soft" type="button" id="previewSupplierImport">قراءة الملف</button><div class="hint">لن تتم الإضافة مباشرة. بعد القراءة ستظهر الأسماء والأرصدة لتعديلها أو حذف أي صف قبل التأكيد.</div><div id="supplierImportPreview"><div class="empty">اختر الملف ثم اضغط قراءة الملف.</div></div></div>`,async()=>{
     const branchId=document.getElementById('supplierImportBranch')?.value||'';
     if(!branchId){toast('اختر الفرع أولًا',true);return false;}
     const rows=collectSupplierImportRows();
@@ -1464,7 +1464,7 @@ function supplierImportModal(){
   const previewBtn=wrap.querySelector('#previewSupplierImport');
   previewBtn.onclick=async()=>{
     const file=wrap.querySelector('#supplierImportFile')?.files?.[0];
-    if(!file){toast('اختر ملف CSV أولًا',true);return;}
+    if(!file){toast('اختر ملف CSV أو Excel أولًا',true);return;}
     previewBtn.disabled=true;previewBtn.textContent='جاري قراءة الملف...';
     try{
       const body=new FormData();body.append('file',file);
