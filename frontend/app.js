@@ -367,12 +367,15 @@ function renderDoctorDailySalesChart(doctor){
   if(!rows.length)return '<section class="panel doctor-daily-chart-panel"><div class="empty">لا توجد بيانات يومية للرسم.</div></section>';
   const max=Math.max(...rows.map(x=>x.value),0),sum=rows.reduce((a,x)=>a+x.value,0),active=rows.filter(x=>x.value>0).length;
   const best=rows.reduce((best,x)=>x.value>best.value?x:best,rows[0]||{value:0,label:'—'});
-  const width=Math.max(760,rows.length*44),height=260,padL=54,padR=20,padT=22,padB=46,innerW=width-padL-padR,innerH=height-padT-padB;
-  const y=v=>max>0?padT+innerH-((v/max)*innerH):padT+innerH;
+  const yMax=3000,tickStep=500,tickValues=[0,500,1000,1500,2000,2500,3000];
+  const width=Math.max(800,rows.length*46),height=270,padL=72,padR=20,padT=22,padB=46,innerW=width-padL-padR,innerH=height-padT-padB;
+  const clampYValue=v=>Math.max(0,Math.min(yMax,Number(v||0)));
+  const y=v=>padT+innerH-((clampYValue(v)/yMax)*innerH);
   const x=i=>padL+(rows.length<=1?innerW/2:(i*(innerW/(rows.length-1))));
   const points=rows.map((r,i)=>`${x(i).toFixed(1)},${y(r.value).toFixed(1)}`).join(' ');
   const barW=Math.max(8,Math.min(22,innerW/Math.max(1,rows.length)-10));
-  const ticks=[0,.25,.5,.75,1].map(t=>{const val=max*t,yy=y(val);return `<g><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${width-padR}" y2="${yy.toFixed(1)}"/><text x="${padL-8}" y="${(yy+4).toFixed(1)}">${money(val)}</text></g>`;}).join('');
+  const axisMoney=v=>`${Number(v||0).toLocaleString('en-US')} د.ل`;
+  const ticks=tickValues.map(val=>{const yy=y(val);return `<g><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${width-padR}" y2="${yy.toFixed(1)}"/><text class="y-label" x="${padL-10}" y="${(yy+4).toFixed(1)}">${axisMoney(val)}</text></g>`;}).join('');
   const bars=rows.map((r,i)=>{const xx=x(i)-barW/2,yy=y(r.value),hh=(padT+innerH)-yy;return `<rect x="${xx.toFixed(1)}" y="${yy.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(2,hh).toFixed(1)}"><title>${esc(r.date||r.label)} — ${money(r.value)}</title></rect>`;}).join('');
   const labels=rows.map((r,i)=>{const show=rows.length<=18||i%2===0||r.value===best.value;return show?`<text class="x-label" x="${x(i).toFixed(1)}" y="${height-18}">${esc(r.day||r.label)}</text>`:'';}).join('');
   const dots=rows.map((r,i)=>r.value>0?`<circle cx="${x(i).toFixed(1)}" cy="${y(r.value).toFixed(1)}" r="3.5"><title>${esc(r.date||r.label)} — ${money(r.value)}</title></circle>`:'').join('');

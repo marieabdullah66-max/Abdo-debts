@@ -160,9 +160,9 @@
 .doctor-daily-chart-stats span{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 9px;font-size:10px;color:var(--muted);white-space:nowrap}
 .doctor-daily-chart-stats strong{color:var(--green);font-size:11px}
 .doctor-daily-chart-scroll{overflow-x:auto;direction:ltr;padding:4px 0 2px;scrollbar-width:thin}
-.doctor-daily-chart{display:block;min-width:100%;font-family:inherit;direction:ltr}
+.doctor-daily-chart{display:block;min-width:100%;font-family:inherit;direction:ltr;overflow:visible}
 .doctor-daily-chart .grid line{stroke:#e4eeeb;stroke-width:1}
-.doctor-daily-chart .grid text{font-size:10px;fill:#70817c;text-anchor:end}
+.doctor-daily-chart .grid text{font-size:10px;fill:#70817c;text-anchor:end;direction:ltr;unicode-bidi:plaintext;font-family:Arial,Tahoma,sans-serif}
 .doctor-daily-chart .bars rect{fill:#dcebe7;rx:5;ry:5}
 .doctor-daily-chart .line{fill:none;stroke:var(--green);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
 .doctor-daily-chart .dots circle{fill:#fff;stroke:var(--green);stroke-width:2}
