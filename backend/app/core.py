@@ -288,7 +288,7 @@ class SupplierCategoryInput(BaseModel):
 class SupplierImportRowInput(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     reference_no: str | None = Field(default=None, max_length=100)
-    balance: float = Field(default=0, ge=0, le=999999999999)
+    balance: float = Field(default=0, ge=-999999999999, le=999999999999)
     last_payment_date: date | None = None
     last_invoice_date: date | None = None
     include: bool = True

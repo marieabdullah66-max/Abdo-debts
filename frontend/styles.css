@@ -182,3 +182,12 @@
 .x-label.friday-date,.pdf-x-label.friday-date{text-anchor:middle}
 .x-label-friday{font-size:11px;fill:#0f7a5b;font-weight:700}
 .pdf-x-label-friday{font-size:8.5px;fill:#0f7a5b;font-weight:700}
+
+/* V65 - supplier debt states */
+.debt-state-badge{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:800;border:1px solid #d7e4e0;background:#f7fbfa;color:#49615a;white-space:nowrap}
+.debt-state-badge.debt_on_us,.money.debt_on_us,.supplier-balance-cell.debt_on_us,.debt-on-us{color:#b42318}
+.debt-state-badge.debt_for_us,.money.debt_for_us,.supplier-balance-cell.debt_for_us,.debt-for-us{color:#0f7a5b}
+.debt-state-badge.no_debt,.money.no_debt,.supplier-balance-cell.no_debt,.no-debt{color:#647067}
+.debt-state-badge.debt_on_us{background:#fff1f0;border-color:#ffd1cc}.debt-state-badge.debt_for_us{background:#ecfdf3;border-color:#bfe8cf}.debt-state-badge.no_debt{background:#f4f6f5;border-color:#d8dfdc}
+.debt-total-parts{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end;font-size:14px}.debt-total-parts b{white-space:nowrap}
+@media(max-width:700px){.debt-total-parts{justify-content:flex-start;font-size:12px;gap:7px}.supplierImportState .debt-state-badge{font-size:11px;padding:3px 7px}}

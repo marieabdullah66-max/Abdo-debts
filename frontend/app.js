@@ -10,6 +10,7 @@ const state = {
   supplierBranchId: '',
   supplierCategoryId: '',
   supplierSort: 'balance_desc',
+  supplierDebtState: '',
   dashboardBranchId: '',
   dashboardCategoryId: '',
   dashboardPeriod: 'all',
@@ -57,6 +58,10 @@ const STATUS_LABELS = {unpaid:'غير مسددة', partial:'جزئي', paid:'م�
 
 function esc(v=''){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function money(v){return `${Number(v||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})} د.ل`;}
+function supplierDebtState(value){value=Number(value||0);return value>0?'debt_for_us':(value<0?'debt_on_us':'no_debt');}
+function supplierDebtLabel(value){const state=supplierDebtState(value);return state==='debt_for_us'?'دين لنا':(state==='debt_on_us'?'دين علينا':'بدون دين');}
+function supplierDebtBadge(value){const state=supplierDebtState(value);return `<span class="debt-state-badge ${state}">${supplierDebtLabel(value)}</span>`;}
+function supplierDebtMoney(value){value=Number(value||0);return `${value>0?'+':''}${money(value)}`;}
 function isoToday(){const d=new Date(),local=new Date(d.getTime()-d.getTimezoneOffset()*60000);return local.toISOString().slice(0,10);}
 function can(p){return !!state.profile?.effective_permissions?.[p];}
 function toast(msg, error=false){toastEl.textContent=msg;toastEl.className=`toast show${error?' error':''}`;clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.className='toast',2800);}
@@ -1603,13 +1608,14 @@ async function suppliersView(main){
   const branchId=state.supplierBranchId||'',categoryId=state.supplierCategoryId||'';
   state.supplierRows=await api(branchId?`/api/suppliers?include_balance=true&branch_id=${encodeURIComponent(branchId)}`:'/api/suppliers?include_balance=true');
   main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-danger" id="resetSupplierValues">حذف قيم الفرع</button><button class="btn btn-soft" id="importSuppliers">استيراد CSV/Excel</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
-  <div class="toolbar supplier-toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."><select id="supplierBranchFilter" class="select">${branchOptions(true,false)}</select><select id="supplierCategoryFilter" class="select"><option value="">كل التصنيفات</option>${state.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><select id="supplierSortFilter" class="select"><option value="balance_desc">الأعلى قيمة</option><option value="balance_asc">الأقل قيمة</option><option value="aging_desc">أكبر Aging</option><option value="aging_asc">أقل Aging</option><option value="name_asc">الاسم أ-ي</option></select></div>
-  <div class="supplier-debt-total"><div><span>إجمالي الدين المتبقي</span><small id="supplierDebtScope">${branchId?'للفرع المحدد':'لكل الفروع'}</small></div><strong class="money" id="supplierDebtTotal">${money(state.supplierRows.reduce((sum,s)=>sum+Number(s.balance||0),0))}</strong></div>
+  <div class="toolbar supplier-toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."><select id="supplierBranchFilter" class="select">${branchOptions(true,false)}</select><select id="supplierCategoryFilter" class="select"><option value="">كل التصنيفات</option>${state.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><select id="supplierDebtStateFilter" class="select"><option value="">كل حالات الدين</option><option value="debt_on_us">دين علينا</option><option value="debt_for_us">دين لنا</option><option value="no_debt">بدون دين</option></select><select id="supplierSortFilter" class="select"><option value="balance_desc">الأعلى قيمة</option><option value="balance_asc">الأقل قيمة</option><option value="aging_desc">أكبر Aging</option><option value="aging_asc">أقل Aging</option><option value="name_asc">الاسم أ-ي</option></select></div>
+  <div class="supplier-debt-total"><div><span>ملخص حالات الدين</span><small id="supplierDebtScope">${branchId?'للفرع المحدد':'لكل الفروع'}</small></div><strong class="money" id="supplierDebtTotal">${money(0)}</strong></div>
   <div id="supplierRows"></div>`;
-  const branchSelect=document.getElementById('supplierBranchFilter'),categorySelect=document.getElementById('supplierCategoryFilter'),sortSelect=document.getElementById('supplierSortFilter');branchSelect.value=branchId;categorySelect.value=categoryId;sortSelect.value=state.supplierSort||'balance_desc';state.supplierCategoryId=categorySelect.value;
+  const branchSelect=document.getElementById('supplierBranchFilter'),categorySelect=document.getElementById('supplierCategoryFilter'),debtStateSelect=document.getElementById('supplierDebtStateFilter'),sortSelect=document.getElementById('supplierSortFilter');branchSelect.value=branchId;categorySelect.value=categoryId;debtStateSelect.value=state.supplierDebtState||'';sortSelect.value=state.supplierSort||'balance_desc';state.supplierCategoryId=categorySelect.value;
   if(can('manage_suppliers')){document.getElementById('addSupplier').onclick=()=>supplierModal(null,async()=>refreshSupplierRows());document.getElementById('importSuppliers').onclick=()=>supplierImportModal();document.getElementById('resetSupplierValues').onclick=()=>resetSupplierValuesModal();}
   document.getElementById('supplierSearch').oninput=renderSupplierRows;
   categorySelect.onchange=()=>{state.supplierCategoryId=categorySelect.value;renderSupplierRows();};
+  debtStateSelect.onchange=()=>{state.supplierDebtState=debtStateSelect.value;renderSupplierRows();};
   sortSelect.onchange=()=>{state.supplierSort=sortSelect.value;renderSupplierRows();};
   branchSelect.onchange=async()=>{state.supplierBranchId=branchSelect.value;await refreshSupplierRows();};
   renderSupplierRows();
@@ -1623,12 +1629,30 @@ async function refreshSupplierRows(){
     renderSupplierRows();
   }catch(e){if(box)box.innerHTML=`<div class="empty">${esc(e.message)}</div>`;toast(e.message,true);}
 }
-function renderSupplierRows(){const box=document.getElementById('supplierRows');if(!box)return;const q=(document.getElementById('supplierSearch')?.value||'').trim().toLowerCase();const categoryId=document.getElementById('supplierCategoryFilter')?.value||state.supplierCategoryId||'';const sortBy=document.getElementById('supplierSortFilter')?.value||state.supplierSort||'balance_desc';state.supplierSort=sortBy;const rows=state.supplierRows.filter(s=>(!categoryId||(s.categories||[]).some(c=>c.id===categoryId))&&(!q||s.name.toLowerCase().includes(q))).sort((a,b)=>{const balA=Number(a.balance||0),balB=Number(b.balance||0);const ageA=a.aging_days===null||a.aging_days===undefined?-1:Number(a.aging_days||0),ageB=b.aging_days===null||b.aging_days===undefined?-1:Number(b.aging_days||0);if(sortBy==='balance_asc')return balA-balB||String(a.name||'').localeCompare(String(b.name||''),'ar');if(sortBy==='aging_desc')return ageB-ageA||balB-balA;if(sortBy==='aging_asc')return (ageA<0?Number.MAX_SAFE_INTEGER:ageA)-(ageB<0?Number.MAX_SAFE_INTEGER:ageB)||balB-balA;if(sortBy==='name_asc')return String(a.name||'').localeCompare(String(b.name||''),'ar');return balB-balA||ageB-ageA;});
+function renderSupplierRows(){
+  const box=document.getElementById('supplierRows');if(!box)return;
+  const q=(document.getElementById('supplierSearch')?.value||'').trim().toLowerCase();
+  const categoryId=document.getElementById('supplierCategoryFilter')?.value||state.supplierCategoryId||'';
+  const debtState=document.getElementById('supplierDebtStateFilter')?.value||state.supplierDebtState||'';state.supplierDebtState=debtState;
+  const sortBy=document.getElementById('supplierSortFilter')?.value||state.supplierSort||'balance_desc';state.supplierSort=sortBy;
+  const rows=state.supplierRows.filter(s=>{
+    const balance=Number(s.balance||0),currentState=s.debt_state||supplierDebtState(balance);
+    return (!categoryId||(s.categories||[]).some(c=>c.id===categoryId))&&(!debtState||currentState===debtState)&&(!q||s.name.toLowerCase().includes(q));
+  }).sort((a,b)=>{
+    const balA=Number(a.balance||0),balB=Number(b.balance||0),absA=Math.abs(balA),absB=Math.abs(balB);
+    const ageA=a.aging_days===null||a.aging_days===undefined?-1:Number(a.aging_days||0),ageB=b.aging_days===null||b.aging_days===undefined?-1:Number(b.aging_days||0);
+    if(sortBy==='balance_asc')return absA-absB||String(a.name||'').localeCompare(String(b.name||''),'ar');
+    if(sortBy==='aging_desc')return ageB-ageA||absB-absA;
+    if(sortBy==='aging_asc')return (ageA<0?Number.MAX_SAFE_INTEGER:ageA)-(ageB<0?Number.MAX_SAFE_INTEGER:ageB)||absB-absA;
+    if(sortBy==='name_asc')return String(a.name||'').localeCompare(String(b.name||''),'ar');
+    return absB-absA||ageB-ageA;
+  });
   const count=document.getElementById('supplierCount');if(count)count.textContent=rows.length;
-  const total=document.getElementById('supplierDebtTotal');if(total)total.textContent=money(rows.reduce((sum,s)=>sum+Number(s.balance||0),0));
-  const branchId=state.supplierBranchId||'',category=state.categories.find(c=>c.id===categoryId);const scope=document.getElementById('supplierDebtScope');if(scope)scope.textContent=[branchId?'الفرع المحدد':'كل الفروع',category?category.name:'كل التصنيفات'].join(' · ');
+  const totals=rows.reduce((acc,s)=>{const bal=Number(s.balance||0);if(bal>0)acc.forUs+=bal;else if(bal<0)acc.onUs+=Math.abs(bal);else acc.zero+=1;return acc;},{forUs:0,onUs:0,zero:0});
+  const total=document.getElementById('supplierDebtTotal');if(total)total.innerHTML=`<span class="debt-total-parts"><b class="debt-on-us">علينا: ${money(totals.onUs)}</b><b class="debt-for-us">لنا: ${money(totals.forUs)}</b><b class="no-debt">بدون دين: ${Number(totals.zero).toLocaleString('en-US')}</b></span>`;
+  const branchId=state.supplierBranchId||'',category=state.categories.find(c=>c.id===categoryId);const scope=document.getElementById('supplierDebtScope');if(scope)scope.textContent=[branchId?'الفرع المحدد':'كل الفروع',category?category.name:'كل التصنيفات',debtState?supplierDebtLabel(debtState==='debt_for_us'?1:(debtState==='debt_on_us'?-1:0)):'كل حالات الدين'].join(' · ');
   const actions=s=>`<button class="btn btn-primary btn-sm" data-open="${s.id}">فتح</button><button class="btn btn-soft btn-sm" data-summary="${s.id}">كشف</button>${can('manage_suppliers')?`<button class="btn btn-ghost btn-sm" data-edit="${s.id}">تعديل</button><button class="btn btn-danger btn-sm" data-delete="${s.id}">حذف</button>`:''}`;
-  box.innerHTML=`<div class="table-wrap desktop-table"><table><thead><tr><th>المورد</th><th>التصنيفات</th><th>المتبقي</th><th>Aging</th><th>الهاتف</th><th>ملاحظات</th><th></th></tr></thead><tbody>${rows.map(s=>`<tr><td><strong>${esc(s.name)}</strong></td><td>${categoryTags(s.categories)}</td><td class="money supplier-balance-cell">${money(s.balance)}</td><td>${supplierAgingBadge(s.aging_days)}</td><td>${esc(s.phone||'-')}</td><td>${esc(s.notes||'-')}</td><td><div class="actions">${actions(s)}</div></td></tr>`).join('')}</tbody></table></div><div class="mobile-list">${rows.map(s=>`<div class="item-card"><div class="item-title supplier-item-title"><div><span>${esc(s.name)}</span>${categoryTags(s.categories)}</div><div class="supplier-mobile-balance"><small>المتبقي</small><strong class="money">${money(s.balance)}</strong></div></div><div class="item-meta"><div><span>Aging · أقدم فاتورة مفتوحة</span>${supplierAgingBadge(s.aging_days)}</div><div><span>الهاتف</span>${esc(s.phone||'-')}</div><div><span>ملاحظات</span>${esc(s.notes||'-')}</div></div><div class="item-actions">${actions(s)}</div></div>`).join('')||'<div class="empty">لا توجد نتائج</div>'}</div>`;
+  box.innerHTML=`<div class="table-wrap desktop-table"><table><thead><tr><th>المورد</th><th>التصنيفات</th><th>حالة الدين</th><th>القيمة</th><th>Aging</th><th>الهاتف</th><th>ملاحظات</th><th></th></tr></thead><tbody>${rows.map(s=>`<tr><td><strong>${esc(s.name)}</strong></td><td>${categoryTags(s.categories)}</td><td>${supplierDebtBadge(s.balance)}</td><td class="money supplier-balance-cell ${supplierDebtState(s.balance)}">${supplierDebtMoney(s.balance)}</td><td>${supplierAgingBadge(s.aging_days)}</td><td>${esc(s.phone||'-')}</td><td>${esc(s.notes||'-')}</td><td><div class="actions">${actions(s)}</div></td></tr>`).join('')}</tbody></table></div><div class="mobile-list">${rows.map(s=>`<div class="item-card"><div class="item-title supplier-item-title"><div><span>${esc(s.name)}</span>${categoryTags(s.categories)}</div><div class="supplier-mobile-balance"><small>${supplierDebtLabel(s.balance)}</small><strong class="money ${supplierDebtState(s.balance)}">${supplierDebtMoney(s.balance)}</strong></div></div><div class="item-meta"><div><span>حالة الدين</span>${supplierDebtBadge(s.balance)}</div><div><span>Aging · أقدم فاتورة مفتوحة</span>${supplierAgingBadge(s.aging_days)}</div><div><span>الهاتف</span>${esc(s.phone||'-')}</div><div><span>ملاحظات</span>${esc(s.notes||'-')}</div></div><div class="item-actions">${actions(s)}</div></div>`).join('')||'<div class="empty">لا توجد نتائج</div>'}</div>`;
   box.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openSupplierPage(b.dataset.open));
   box.querySelectorAll('[data-summary]').forEach(b=>b.onclick=()=>supplierSummaryModal(b.dataset.summary));
   box.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>supplierModal(state.suppliers.find(s=>s.id===b.dataset.edit)||state.supplierRows.find(s=>s.id===b.dataset.edit),async()=>refreshSupplierRows()));
@@ -1658,9 +1682,10 @@ function supplierImportModal(){
     if(!branchId){toast('اختر الفرع أولًا',true);return false;}
     const rows=collectSupplierImportRows();
     if(!rows.length){toast('لا توجد صفوف للاستيراد',true);return false;}
-    if(!confirmAction(`تأكيد استيراد ${rows.length} مورد/رصيد للفرع المحدد؟`))return false;
+    if(!confirmAction(`تأكيد استيراد ${rows.length} مورد/رصيد للفرع المحدد؟
+الموجب = دين لنا، السالب = دين علينا، الصفر = بدون دين`))return false;
     const result=await api('/api/suppliers/import',{method:'POST',body:JSON.stringify({branch_id:branchId,rows})});
-    toast(`تم الاستيراد: ${result.created_suppliers} مورد جديد، ${result.existing_suppliers} موجود، ${result.invoices_created} فاتورة رصيد`);
+    toast(`تم الاستيراد: ${result.created_suppliers} مورد جديد، ${result.existing_suppliers} موجود، ${result.invoices_created} دين علينا، ${result.debt_for_us_count||0} دين لنا، ${result.no_debt_count||0} بدون دين`);
     await refreshSupplierRows();
     return true;
   },{large:true,saveText:'تأكيد الاستيراد'});
@@ -1681,8 +1706,9 @@ function supplierImportModal(){
 function renderSupplierImportPreview(wrap,rows){
   const box=wrap.querySelector('#supplierImportPreview');
   if(!rows.length){box.innerHTML='<div class="empty">لم يتم العثور على موردين صالحين في الملف.</div>';return;}
-  box.innerHTML=`<div class="supplier-import-summary">تم استخراج <b>${rows.length}</b> صف. عدّل الاسم أو الرصيد أو احذف أي صف قبل التأكيد.</div><div class="supplier-import-table"><table><thead><tr><th>استيراد</th><th>اسم المورد</th><th>ر.م</th><th>الرصيد</th><th>آخر سداد</th><th>آخر فاتورة</th><th></th></tr></thead><tbody>${rows.map((r,i)=>`<tr data-import-row><td><input type="checkbox" class="supplierImportInclude" checked></td><td><input class="input supplierImportName" value="${esc(r.name||'')}" required></td><td><input class="input supplierImportRef" value="${esc(r.reference_no||'')}"></td><td><input class="input supplierImportBalance" type="number" min="0" step="0.01" value="${Number(r.balance||0)}"></td><td><input class="input supplierImportPaid" type="date" value="${esc(r.last_payment_date||'')}"></td><td><input class="input supplierImportInvoice" type="date" value="${esc(r.last_invoice_date||'')}"></td><td><button class="btn btn-danger btn-sm" type="button" onclick="this.closest('[data-import-row]').remove();updateSupplierImportCount()">حذف</button></td></tr>`).join('')}</tbody></table></div><div class="hint" id="supplierImportCount">${rows.length} صف جاهز للاستيراد</div>`;
+  box.innerHTML=`<div class="supplier-import-summary">تم استخراج <b>${rows.length}</b> صف. الموجب = دين لنا، السالب = دين علينا، الصفر = بدون دين. عدّل قبل التأكيد.</div><div class="supplier-import-table"><table><thead><tr><th>استيراد</th><th>اسم المورد</th><th>ر.م</th><th>الرصيد</th><th>الحالة</th><th>آخر سداد</th><th>آخر فاتورة</th><th></th></tr></thead><tbody>${rows.map((r,i)=>`<tr data-import-row><td><input type="checkbox" class="supplierImportInclude" checked></td><td><input class="input supplierImportName" value="${esc(r.name||'')}" required></td><td><input class="input supplierImportRef" value="${esc(r.reference_no||'')}"></td><td><input class="input supplierImportBalance" type="number" step="0.01" value="${Number(r.balance||0)}" oninput="updateSupplierImportRowState(this)"></td><td class="supplierImportState">${supplierDebtBadge(Number(r.balance||0))}</td><td><input class="input supplierImportPaid" type="date" value="${esc(r.last_payment_date||'')}"></td><td><input class="input supplierImportInvoice" type="date" value="${esc(r.last_invoice_date||'')}"></td><td><button class="btn btn-danger btn-sm" type="button" onclick="this.closest('[data-import-row]').remove();updateSupplierImportCount()">حذف</button></td></tr>`).join('')}</tbody></table></div><div class="hint" id="supplierImportCount">${rows.length} صف جاهز للاستيراد</div>`;
 }
+function updateSupplierImportRowState(input){const row=input.closest('[data-import-row]'),cell=row?.querySelector('.supplierImportState');if(cell)cell.innerHTML=supplierDebtBadge(Number(input.value||0));updateSupplierImportCount();}
 function collectSupplierImportRows(){
   return [...document.querySelectorAll('[data-import-row]')].map(row=>({
     include:row.querySelector('.supplierImportInclude')?.checked!==false,

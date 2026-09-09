@@ -24,13 +24,38 @@ def _parse_money(value: Any) -> float:
     raw = _clean_text(value).replace(",", "")
     if not raw:
         return 0.0
-    raw = re.sub(r"[^0-9.\-]", "", raw)
-    if raw in {"", ".", "-"}:
+    # Preserve the sign from the external report:
+    # positive = debt for us, negative = debt on us, zero = no debt.
+    negative = False
+    if raw.endswith("-"):
+        negative = True
+        raw = raw[:-1].strip()
+    if raw.startswith("(") and raw.endswith(")"):
+        negative = True
+        raw = raw[1:-1].strip()
+    cleaned = re.sub(r"[^0-9.\-]", "", raw)
+    if cleaned.count("-") > 1:
+        cleaned = cleaned.replace("-", "")
+        negative = True
+    if cleaned.startswith("-"):
+        negative = True
+        cleaned = cleaned[1:]
+    if cleaned in {"", ".", "-"}:
         return 0.0
     try:
-        return float(abs(Decimal(raw)))
+        amount = float(Decimal(cleaned))
     except (InvalidOperation, ValueError):
         return 0.0
+    return round(-abs(amount) if negative else amount, 2)
+
+
+def _debt_state(value: float) -> str:
+    amount = round(float(value or 0), 2)
+    if amount > 0:
+        return "debt_for_us"
+    if amount < 0:
+        return "debt_on_us"
+    return "no_debt"
 
 
 def _parse_date(value: Any) -> date | None:
@@ -91,6 +116,8 @@ def _supplier_import_row(cells: list[Any], idx: int) -> dict[str, Any] | None:
         "name": name[:160],
         "reference_no": reference_no[:100] or None,
         "balance": round(balance, 2),
+        "debt_state": _debt_state(balance),
+        "debt_label": "دين لنا" if balance > 0 else ("دين علينا" if balance < 0 else "بدون دين"),
         "last_payment_date": last_payment_date.isoformat() if last_payment_date else None,
         "last_invoice_date": last_invoice_date.isoformat() if last_invoice_date else None,
         "include": True,
@@ -149,6 +176,47 @@ async def _unique_import_invoice_number(supplier_id: str, base: str) -> str:
         if candidate not in used:
             return candidate
     return f"{base}-{int(time.time())}"
+
+async def _external_balances(branch_id: str | None, profile: dict[str, Any]) -> list[dict[str, Any]]:
+    params: dict[str, str] = {"select": "supplier_id,branch_id,signed_balance,last_invoice_date,last_payment_date,reference_no", "limit": "10000"}
+    params = apply_branch_filter(params, profile)
+    if branch_id:
+        require_branch_access(profile, branch_id)
+        params["branch_id"] = f"eq.{branch_id}"
+    try:
+        return await sb("GET", "/rest/v1/supplier_external_balances", service=True, params=params) or []
+    except HTTPException as exc:
+        detail = str(getattr(exc, "detail", ""))
+        if "supplier_external_balances" in detail or "does not exist" in detail:
+            return []
+        raise
+
+
+async def _upsert_external_balance(*, supplier_id: str, branch_id: str, signed_balance: float, row: SupplierImportRowInput, profile: dict[str, Any]) -> None:
+    payload = {
+        "supplier_id": supplier_id,
+        "branch_id": branch_id,
+        "signed_balance": round(float(signed_balance or 0), 2),
+        "reference_no": row.reference_no,
+        "last_payment_date": row.last_payment_date.isoformat() if row.last_payment_date else None,
+        "last_invoice_date": row.last_invoice_date.isoformat() if row.last_invoice_date else None,
+        "updated_by": profile["id"],
+    }
+    try:
+        await sb(
+            "POST",
+            "/rest/v1/supplier_external_balances",
+            service=True,
+            headers={"Prefer": "resolution=merge-duplicates"},
+            params={"on_conflict": "supplier_id,branch_id"},
+            json=payload,
+        )
+    except HTTPException as exc:
+        detail = str(getattr(exc, "detail", ""))
+        if "supplier_external_balances" in detail or "does not exist" in detail:
+            raise HTTPException(500, "يلزم تشغيل SQL الخاص بإصدار V65 قبل استيراد أرصدة الموردين بالإشارة") from exc
+        raise
+
 
 async def _category_map() -> dict[str, list[dict[str, Any]]]:
     links = await sb(
@@ -237,6 +305,9 @@ async def import_suppliers(data: SupplierImportInput, profile: dict[str, Any] = 
     created = 0
     reused = 0
     invoices_created = 0
+    debt_for_us_count = 0
+    debt_on_us_count = 0
+    no_debt_count = 0
     skipped = 0
     imported_rows = []
 
@@ -266,7 +337,19 @@ async def import_suppliers(data: SupplierImportInput, profile: dict[str, Any] = 
             if row.reference_no:
                 await sb("PATCH", "/rest/v1/suppliers", service=True, params={"id": f"eq.{supplier['id']}"}, json={"notes": f"استيراد خارجي - ر.م: {row.reference_no}"})
 
-        if round(float(row.balance or 0), 2) > 0:
+        signed_balance = round(float(row.balance or 0), 2)
+        if signed_balance > 0:
+            debt_for_us_count += 1
+        elif signed_balance < 0:
+            debt_on_us_count += 1
+        else:
+            no_debt_count += 1
+        await _upsert_external_balance(supplier_id=supplier["id"], branch_id=data.branch_id, signed_balance=signed_balance, row=row, profile=profile)
+
+        # In the external supplier report: negative value = debt on us.
+        # Keep the ordinary invoice system positive by creating an opening invoice
+        # only for values we owe, using the absolute amount.
+        if signed_balance < 0:
             invoice_date = row.last_invoice_date or date.today()
             ref = _clean_text(row.reference_no) or str(idx)
             invoice_number = await _unique_import_invoice_number(supplier["id"], f"IMPORT-{ref}-{invoice_date.isoformat()}")
@@ -274,20 +357,23 @@ async def import_suppliers(data: SupplierImportInput, profile: dict[str, Any] = 
                 "supplier_id": supplier["id"],
                 "branch_id": data.branch_id,
                 "invoice_number": invoice_number,
-                "amount": round(float(row.balance or 0), 2),
+                "amount": abs(signed_balance),
                 "invoice_date": invoice_date.isoformat(),
                 "due_date": None,
-                "notes": f"رصيد مستورد من ملف خارجي{(' - آخر سداد: ' + row.last_payment_date.isoformat()) if row.last_payment_date else ''}",
+                "notes": f"رصيد مستورد من ملف خارجي - دين علينا{(' - آخر سداد: ' + row.last_payment_date.isoformat()) if row.last_payment_date else ''}",
                 "created_by": profile["id"],
             })
             invoices_created += 1
-        imported_rows.append({"name": clean_name, "supplier_id": supplier["id"], "balance": round(float(row.balance or 0), 2)})
+        imported_rows.append({"name": clean_name, "supplier_id": supplier["id"], "balance": signed_balance, "debt_state": _debt_state(signed_balance)})
 
     return {
         "ok": True,
         "created_suppliers": created,
         "existing_suppliers": reused,
         "invoices_created": invoices_created,
+        "debt_for_us_count": debt_for_us_count,
+        "debt_on_us_count": debt_on_us_count,
+        "no_debt_count": no_debt_count,
         "skipped": skipped,
         "rows": imported_rows[:50],
     }
@@ -329,6 +415,12 @@ async def reset_supplier_values(data: SupplierResetValuesInput, profile: dict[st
         await sb("DELETE", "/rest/v1/payment_allocations", service=True, params={"invoice_id": f"in.({','.join(ids)})"})
     await sb("DELETE", "/rest/v1/payments", service=True, params={"branch_id": f"eq.{data.branch_id}"})
     await sb("DELETE", "/rest/v1/invoices", service=True, params={"branch_id": f"eq.{data.branch_id}"})
+    try:
+        await sb("DELETE", "/rest/v1/supplier_external_balances", service=True, params={"branch_id": f"eq.{data.branch_id}"})
+    except HTTPException as exc:
+        detail = str(getattr(exc, "detail", ""))
+        if "supplier_external_balances" not in detail and "does not exist" not in detail:
+            raise
 
     return {
         "ok": True,
@@ -361,6 +453,8 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
         require_branch_access(profile, branch_id)
         inv_params["branch_id"] = f"eq.{branch_id}"
     invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=inv_params)
+    external_rows = await _external_balances(branch_id, profile)
+    external_by_supplier: dict[str, dict[str, Any]] = {row.get("supplier_id"): row for row in external_rows if row.get("supplier_id")}
 
     balances: dict[str, float] = {}
     oldest_open_invoice: dict[str, date] = {}
@@ -382,15 +476,21 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
         if previous is None or invoice_date < previous:
             oldest_open_invoice[sid] = invoice_date
 
+    suppliers_in_branch.update(external_by_supplier.keys())
     today = date.today()
     rows = []
     for supplier in suppliers or []:
         if branch_id and supplier.get("id") not in suppliers_in_branch:
             continue
+        external = external_by_supplier.get(supplier.get("id")) or {}
+        signed_balance = round(float(external.get("signed_balance") if external else balances.get(supplier.get("id"), 0.0) or 0.0), 2)
         rows.append({
             **supplier,
             "categories": categories_by_supplier.get(supplier.get("id"), []),
-            "balance": round(balances.get(supplier.get("id"), 0.0), 2),
+            "balance": signed_balance,
+            "debt_state": _debt_state(signed_balance),
+            "debt_label": "دين لنا" if signed_balance > 0 else ("دين علينا" if signed_balance < 0 else "بدون دين"),
+            "import_reference_no": external.get("reference_no"),
             "aging_days": (
                 max(0, (today - oldest_open_invoice[supplier.get("id")]).days)
                 if supplier.get("id") in oldest_open_invoice else None
