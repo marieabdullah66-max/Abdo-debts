@@ -60,6 +60,42 @@ function isoToday(){const d=new Date(),local=new Date(d.getTime()-d.getTimezoneO
 function can(p){return !!state.profile?.effective_permissions?.[p];}
 function toast(msg, error=false){toastEl.textContent=msg;toastEl.className=`toast show${error?' error':''}`;clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.className='toast',2800);}
 function confirmAction(msg){return window.confirm(msg);}
+function operationMessage(path='',method='GET'){
+  const p=String(path||'').toLowerCase(),m=String(method||'GET').toUpperCase();
+  if(p.includes('/auth/login'))return 'جاري تسجيل الدخول...';
+  if(p.includes('/import/preview'))return 'جاري قراءة الملف...';
+  if(p.includes('/import'))return 'جاري استيراد الملف...';
+  if(p.includes('/reset')||p.includes('/clear'))return 'جاري حذف القيم...';
+  if(p.includes('/pdf'))return 'جاري تجهيز الملف...';
+  if(m==='GET')return 'جاري تحميل البيانات...';
+  if(m==='DELETE')return 'جاري الحذف...';
+  if(['PUT','PATCH'].includes(m))return 'جاري حفظ التعديل...';
+  return 'جاري تنفيذ العملية...';
+}
+function ensureGlobalBusy(){
+  let el=document.getElementById('globalBusyOverlay');
+  if(!el){
+    el=document.createElement('div');
+    el.id='globalBusyOverlay';
+    el.className='global-busy-overlay';
+    el.innerHTML='<div class="global-busy-card"><div class="global-busy-spinner"></div><strong id="globalBusyText">جاري تنفيذ العملية...</strong><small>يرجى الانتظار حتى تكتمل العملية</small></div>';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function showGlobalBusy(message='جاري تنفيذ العملية...'){
+  state.globalBusyCount=(state.globalBusyCount||0)+1;
+  const el=ensureGlobalBusy();
+  const txt=el.querySelector('#globalBusyText');
+  if(txt)txt.textContent=message;
+  document.body.classList.add('is-global-busy');
+}
+function hideGlobalBusy(){
+  state.globalBusyCount=Math.max(0,(state.globalBusyCount||0)-1);
+  if(state.globalBusyCount===0)document.body.classList.remove('is-global-busy');
+}
+async function withGlobalBusy(message,fn){showGlobalBusy(message);try{return await fn();}finally{hideGlobalBusy();}}
+function confirmAction(msg){return window.confirm(msg);}
 let authRefreshPromise = null;
 let sessionExpiredShown = false;
 
@@ -144,28 +180,37 @@ async function responseError(res){
 }
 
 async function api(path, options={}, retry=true){
+  const {busyMessage=null,silentBusy=false,...fetchOptions}=options||{};
   const authRequest=!path.startsWith('/api/auth/');
-  if(authRequest && retry && state.refreshToken && (!state.accessToken || accessTokenNeedsRefresh())){
-    await refreshSession(false);
-  }
-  const headers={...(options.headers||{})};
-  if(state.accessToken)headers.Authorization=`Bearer ${state.accessToken}`;
-  if(options.body && !(options.body instanceof FormData))headers['Content-Type']='application/json';
-  const res=await fetch(path,{...options,headers});
-  if(!res.ok){
-    const msg=await responseError(res);
-    if(authRequest && retry && state.refreshToken && isSessionTokenError(res.status,msg)){
-      const refreshed=await refreshSession(true);
-      if(refreshed)return api(path,options,false);
-      throw new Error('انتهت الجلسة. سجل الدخول من جديد.');
+  const method=String(fetchOptions.method||'GET').toUpperCase();
+  const skipBusy=silentBusy||path.includes('/api/auth/refresh')||path.includes('/api/auth/accounts')||path.includes('/api/notifications');
+  const useBusy=!skipBusy;
+  if(useBusy)showGlobalBusy(busyMessage||operationMessage(path,method));
+  try{
+    if(authRequest && retry && state.refreshToken && (!state.accessToken || accessTokenNeedsRefresh())){
+      await refreshSession(false);
     }
-    if(authRequest && isSessionTokenError(res.status,msg)){
-      expireSession();
-      throw new Error('انتهت الجلسة. سجل الدخول من جديد.');
+    const headers={...(fetchOptions.headers||{})};
+    if(state.accessToken)headers.Authorization=`Bearer ${state.accessToken}`;
+    if(fetchOptions.body && !(fetchOptions.body instanceof FormData))headers['Content-Type']='application/json';
+    const res=await fetch(path,{...fetchOptions,headers});
+    if(!res.ok){
+      const msg=await responseError(res);
+      if(authRequest && retry && state.refreshToken && isSessionTokenError(res.status,msg)){
+        const refreshed=await refreshSession(true);
+        if(refreshed)return api(path,{...fetchOptions,busyMessage,silentBusy:true},false);
+        throw new Error('انتهت الجلسة. سجل الدخول من جديد.');
+      }
+      if(authRequest && isSessionTokenError(res.status,msg)){
+        expireSession();
+        throw new Error('انتهت الجلسة. سجل الدخول من جديد.');
+      }
+      throw new Error(msg);
     }
-    throw new Error(msg);
+    const ct=res.headers.get('content-type')||'';return ct.includes('json')?res.json():res;
+  }finally{
+    if(useBusy)hideGlobalBusy();
   }
-  const ct=res.headers.get('content-type')||'';return ct.includes('json')?res.json():res;
 }
 
 function fmtDateTime(v){try{return new Intl.DateTimeFormat('ar-LY',{dateStyle:'short',timeStyle:'short'}).format(new Date(v));}catch{return String(v||'');}}
