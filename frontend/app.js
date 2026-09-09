@@ -334,6 +334,34 @@ function renderDoctorKpiSummary(doctor){
   return `<section class="panel doctor-kpi-panel"><div class="doctor-kpi-main ${doctorKpiClass(doctor?.kpi_score)}"><div><span>KPI العام</span><strong>${overall}</strong><em>${esc(doctorKpiLabel(doctor))}</em></div><small>تقييم نسبي مقارنة بباقي الدكاترة داخل نفس التقرير.</small></div><div class="doctor-kpi-subgrid"><div class="doctor-kpi-sub"><span>Productivity KPI</span><strong>${productivity}</strong><small>المبيعات/يوم + فواتير/يوم</small></div><div class="doctor-kpi-sub"><span>Basket Quality KPI</span><strong>${basket}</strong><small>متوسط وMedian والأصناف والفواتير الكبيرة</small></div><div class="doctor-kpi-sub"><span>Consistency KPI</span><strong>${consistency}</strong><small>ثبات الأداء اليومي</small></div><div class="doctor-kpi-sub"><span>تنوع المبيعات</span><strong>${Number(doctor?.diversity_rate||0).toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})}</strong><small>صنف مختلف لكل 100 فاتورة</small></div></div><div class="doctor-kpi-note">الأوزان: المبيعات/يوم 25% · فواتير/يوم 15% · متوسط الفاتورة 15% · Median 10% · أصناف/فاتورة 10% · نسبة فواتير &gt;100 = 10% · الثبات 10% · التنوع 5%.</div></section>`;
 }
 
+function doctorChartPercent(value,max){
+  const v=Number(value||0),m=Number(max||0);if(!Number.isFinite(v)||!Number.isFinite(m)||m<=0)return 0;
+  return Math.max(0,Math.min(100,(v/m)*100));
+}
+function doctorChartRows(rows,metric,label,limit=8,formatter=money){
+  const clean=[...(rows||[])].filter(x=>Number(x?.[metric]||0)>0).sort((a,b)=>Number(b[metric]||0)-Number(a[metric]||0)).slice(0,limit);
+  if(!clean.length)return '<div class="empty doctor-chart-empty">لا توجد بيانات كافية للرسم.</div>';
+  const max=Math.max(...clean.map(x=>Number(x[metric]||0)),1);
+  return `<div class="doctor-bar-chart">${clean.map((x,i)=>{const pct=doctorChartPercent(x[metric],max);return `<div class="doctor-bar-row"><div class="doctor-bar-rank">${i+1}</div><div class="doctor-bar-name" title="${esc(x.doctor||'—')}">${esc(x.doctor||'—')}</div><div class="doctor-bar-track"><span style="width:${pct.toFixed(2)}%"></span></div><div class="doctor-bar-value"><small>${esc(label)}</small><strong>${formatter(x[metric])}</strong></div></div>`;}).join('')}</div>`;
+}
+function doctorKpiChartRows(rows){
+  const clean=[...(rows||[])].filter(x=>Number(x?.kpi_score||0)>0).sort((a,b)=>Number(b.kpi_score||0)-Number(a.kpi_score||0)).slice(0,8);
+  if(!clean.length)return '<div class="empty doctor-chart-empty">لا توجد بيانات KPI كافية.</div>';
+  return `<div class="doctor-bar-chart doctor-kpi-chart">${clean.map((x,i)=>{const pct=doctorChartPercent(x.kpi_score,100);return `<div class="doctor-bar-row"><div class="doctor-bar-rank">${i+1}</div><div class="doctor-bar-name" title="${esc(x.doctor||'—')}">${esc(x.doctor||'—')}</div><div class="doctor-bar-track"><span style="width:${pct.toFixed(2)}%"></span></div><div class="doctor-bar-value"><small>${esc(doctorKpiLabel(x))}</small><strong>${doctorKpiValue(x.kpi_score)}</strong></div></div>`;}).join('')}</div>`;
+}
+function renderDoctorShareChart(rows){
+  const clean=[...(rows||[])].filter(x=>Number(x.net_sales||0)>0).sort((a,b)=>Number(b.net_sales||0)-Number(a.net_sales||0));
+  const total=clean.reduce((sum,x)=>sum+Number(x.net_sales||0),0);if(total<=0)return '<div class="empty doctor-chart-empty">لا توجد مبيعات صافية للرسم.</div>';
+  const top=clean.slice(0,5),shown=top.reduce((sum,x)=>sum+Number(x.net_sales||0),0),others=Math.max(0,total-shown);
+  const slices=top.map((x,i)=>({name:x.doctor||'—',value:Number(x.net_sales||0),cls:`doctor-slice-${i+1}`}));if(others>0)slices.push({name:'باقي الدكاترة',value:others,cls:'doctor-slice-other'});
+  let deg=0;const parts=slices.map(s=>{const start=deg,end=deg+(s.value/total)*360;deg=end;return `var(--${s.cls}) ${start.toFixed(2)}deg ${end.toFixed(2)}deg`;}).join(',');
+  return `<div class="doctor-share-chart"><div class="doctor-donut" style="background:conic-gradient(${parts});"><div><strong>${money(total)}</strong><small>إجمالي الصافي</small></div></div><div class="doctor-share-legend">${slices.map(s=>`<div><span class="${s.cls}"></span><strong>${esc(s.name)}</strong><small>${((s.value/total)*100).toLocaleString('en-US',{minimumFractionDigits:1,maximumFractionDigits:1})}% · ${money(s.value)}</small></div>`).join('')}</div></div>`;
+}
+function renderDoctorSalesCharts(data){
+  const rows=data?.doctors||[];if(!rows.length)return '';
+  return `<section class="panel doctor-charts-panel"><div class="section-head doctor-charts-head"><div><h3>Charts مبيعات الدكاترة</h3><div class="muted">قراءة سريعة للأعلى مبيعًا، الأكثر فواتير، أعلى KPI، ونسبة مساهمة كل دكتور من الصافي.</div></div><span class="badge badge-green">تتحدث حسب الفترة المختارة</span></div><div class="doctor-charts-grid"><div class="doctor-chart-card doctor-chart-wide"><div class="doctor-chart-title"><strong>أعلى الدكاترة حسب صافي المبيعات</strong><small>Net Sales</small></div>${doctorChartRows(rows,'net_sales','صافي')}</div><div class="doctor-chart-card"><div class="doctor-chart-title"><strong>نسبة المساهمة من الصافي</strong><small>Top 5 + الباقي</small></div>${renderDoctorShareChart(rows)}</div><div class="doctor-chart-card"><div class="doctor-chart-title"><strong>الأكثر فواتير</strong><small>Invoice Count</small></div>${doctorChartRows(rows,'invoice_count','فاتورة',8,x=>Number(x||0).toLocaleString('en-US'))}</div><div class="doctor-chart-card doctor-chart-wide"><div class="doctor-chart-title"><strong>أعلى KPI</strong><small>تقييم الأداء العام</small></div>${doctorKpiChartRows(rows)}</div></div></section>`;
+}
+
 function doctorSalesFilteredRows(){
   const data=state.doctorSalesAnalysis;if(!data)return [];
   const q=String(state.doctorSalesSearch||'').trim().toLowerCase();
@@ -415,6 +443,7 @@ function renderDoctorSalesResults(){
     <div class="stat"><div class="label">أيام النشاط</div><div class="value">${Number(t.active_days||0).toLocaleString('en-US')}</div></div>
     <div class="stat"><div class="label">متوسط KPI الفريق</div><div class="value">${doctorKpiValue(t.kpi_average)}</div></div><div class="stat"><div class="label">متوسط الإيراد اليومي</div><div class="value">${money(t.daily_average)}</div><div class="sub">صافي المبيعات ÷ أيام النشاط</div></div>
   </div>
+  ${renderDoctorSalesCharts(data)}
   <section class="doctor-sales-filter-panel"><div class="toolbar doctor-sales-toolbar"><input class="input" id="doctorSalesSearch" value="${esc(state.doctorSalesSearch)}" placeholder="بحث باسم الدكتور..."><select class="select" id="doctorSalesSort"><option value="kpi_desc">الأعلى KPI</option><option value="net_desc">الأعلى صافي مبيعات</option><option value="sales_desc">الأعلى مبيعات</option><option value="invoices_desc">الأكثر فواتير</option><option value="average_desc">الأعلى متوسط فاتورة</option><option value="daily_desc">الأعلى متوسط يومي</option><option value="days_desc">الأكثر أيام نشاط</option><option value="items_desc">الأكثر أصنافًا مختلفة</option></select></div></section>
   <div id="doctorSalesTable"></div>`;
   const search=document.getElementById('doctorSalesSearch'),sort=document.getElementById('doctorSalesSort'),pdfBtn=document.getElementById('doctorSalesPdfExport');sort.value=state.doctorSalesSort||'net_desc';
