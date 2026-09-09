@@ -362,15 +362,15 @@ function renderDoctorSalesCharts(data){
   return `<section class="panel doctor-charts-panel"><div class="section-head doctor-charts-head"><div><h3>Charts مبيعات الدكاترة</h3><div class="muted">قراءة سريعة للأعلى مبيعًا، الأكثر فواتير، أعلى KPI، ونسبة مساهمة كل دكتور من الصافي.</div></div><span class="badge badge-green">تتحدث حسب الفترة المختارة</span></div><div class="doctor-charts-grid"><div class="doctor-chart-card doctor-chart-wide"><div class="doctor-chart-title"><strong>أعلى الدكاترة حسب صافي المبيعات</strong><small>Net Sales</small></div>${doctorChartRows(rows,'net_sales','صافي')}</div><div class="doctor-chart-card"><div class="doctor-chart-title"><strong>نسبة المساهمة من الصافي</strong><small>Top 5 + الباقي</small></div>${renderDoctorShareChart(rows)}</div><div class="doctor-chart-card"><div class="doctor-chart-title"><strong>الأكثر فواتير</strong><small>Invoice Count</small></div>${doctorChartRows(rows,'invoice_count','فاتورة',8,x=>Number(x||0).toLocaleString('en-US'))}</div><div class="doctor-chart-card doctor-chart-wide"><div class="doctor-chart-title"><strong>أعلى KPI</strong><small>تقييم الأداء العام</small></div>${doctorKpiChartRows(rows)}</div></div></section>`;
 }
 
-function renderDoctorDailySalesChart(doctor){
-  const rows=(doctor?.daily_sales||[]).map(x=>({label:String(x.label||x.date||''),day:String(x.day||''),date:String(x.date||''),value:Number(x.net_sales||0)}));
-  if(!rows.length)return '<section class="panel doctor-daily-chart-panel"><div class="empty">لا توجد بيانات يومية للرسم.</div></section>';
-  const max=Math.max(...rows.map(x=>x.value),0),sum=rows.reduce((a,x)=>a+x.value,0),active=rows.filter(x=>x.value>0).length;
+function renderDailySalesChart(rows,{title='المبيعات اليومية خلال الشهر',subtitle='رسم يومي لصافي المبيعات حسب أيام الفترة المختارة.',panelClass='doctor-daily-chart-panel',important=false}={}){
+  rows=(rows||[]).map(x=>({label:String(x.label||x.date||''),day:String(x.day||''),date:String(x.date||x.label||''),value:Number(x.value??x.net_sales??0)}));
+  if(!rows.length)return `<section class="panel ${esc(panelClass)}"><div class="empty">لا توجد بيانات يومية للرسم.</div></section>`;
+  const sum=rows.reduce((a,x)=>a+x.value,0),active=rows.filter(x=>x.value>0).length;
   const best=rows.reduce((best,x)=>x.value>best.value?x:best,rows[0]||{value:0,label:'—'});
-  const yMax=3000,tickStep=500,tickValues=[0,500,1000,1500,2000,2500,3000];
-  const width=Math.max(800,rows.length*46),height=270,padL=72,padR=20,padT=22,padB=46,innerW=width-padL-padR,innerH=height-padT-padB;
-  const clampYValue=v=>Math.max(0,Math.min(yMax,Number(v||0)));
-  const y=v=>padT+innerH-((clampYValue(v)/yMax)*innerH);
+  const baseMax=3000,tickStep=500,highest=Math.max(baseMax,...rows.map(x=>x.value),0),yMax=Math.ceil(highest/tickStep)*tickStep;
+  const tickValues=[];for(let v=0;v<=yMax;v+=tickStep)tickValues.push(v);
+  const width=Math.max(800,rows.length*46),height=important?300:270,padL=82,padR=20,padT=22,padB=46,innerW=width-padL-padR,innerH=height-padT-padB;
+  const y=v=>padT+innerH-((Math.max(0,Number(v||0))/Math.max(1,yMax))*innerH);
   const x=i=>padL+(rows.length<=1?innerW/2:(i*(innerW/(rows.length-1))));
   const points=rows.map((r,i)=>`${x(i).toFixed(1)},${y(r.value).toFixed(1)}`).join(' ');
   const barW=Math.max(8,Math.min(22,innerW/Math.max(1,rows.length)-10));
@@ -379,7 +379,35 @@ function renderDoctorDailySalesChart(doctor){
   const bars=rows.map((r,i)=>{const xx=x(i)-barW/2,yy=y(r.value),hh=(padT+innerH)-yy;return `<rect x="${xx.toFixed(1)}" y="${yy.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(2,hh).toFixed(1)}"><title>${esc(r.date||r.label)} — ${money(r.value)}</title></rect>`;}).join('');
   const labels=rows.map((r,i)=>{const show=rows.length<=18||i%2===0||r.value===best.value;return show?`<text class="x-label" x="${x(i).toFixed(1)}" y="${height-18}">${esc(r.day||r.label)}</text>`:'';}).join('');
   const dots=rows.map((r,i)=>r.value>0?`<circle cx="${x(i).toFixed(1)}" cy="${y(r.value).toFixed(1)}" r="3.5"><title>${esc(r.date||r.label)} — ${money(r.value)}</title></circle>`:'').join('');
-  return `<section class="panel doctor-daily-chart-panel"><div class="section-head doctor-daily-chart-head"><div><h3>المبيعات اليومية خلال الشهر</h3><div class="muted">رسم يومي لصافي مبيعات الدكتور حسب أيام الفترة المختارة.</div></div><div class="doctor-daily-chart-stats"><span>الإجمالي: <strong>${money(sum)}</strong></span><span>أيام نشطة: <strong>${Number(active).toLocaleString('en-US')}</strong></span><span>أعلى يوم: <strong>${esc(best.label)} · ${money(best.value)}</strong></span></div></div><div class="doctor-daily-chart-scroll"><svg class="doctor-daily-chart" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="المبيعات اليومية خلال الشهر"><g class="grid">${ticks}</g><g class="bars">${bars}</g><polyline class="line" points="${points}"/><g class="dots">${dots}</g><g class="x-axis">${labels}</g></svg></div></section>`;
+  return `<section class="panel ${panelClass} ${important?'report-main-daily-chart':''}"><div class="section-head doctor-daily-chart-head"><div><h3>${esc(title)}</h3><div class="muted">${esc(subtitle)}</div></div><div class="doctor-daily-chart-stats"><span>الإجمالي: <strong>${money(sum)}</strong></span><span>أيام نشطة: <strong>${Number(active).toLocaleString('en-US')}</strong></span><span>أعلى يوم: <strong>${esc(best.label)} · ${money(best.value)}</strong></span></div></div><div class="doctor-daily-chart-scroll"><svg class="doctor-daily-chart" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="${esc(title)}"><g class="grid">${ticks}</g><g class="bars">${bars}</g><polyline class="line" points="${points}"/><g class="dots">${dots}</g><g class="x-axis">${labels}</g></svg></div></section>`;
+}
+function parseIsoDay(value){
+  const m=String(value||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m)return null;
+  return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+}
+function formatIsoDay(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+function formatDisplayDay(d){return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;}
+function buildPharmacyDailySalesRows(data){
+  const totals=new Map();
+  (data?.doctors||[]).forEach(doc=>(doc.daily_sales||[]).forEach(r=>{const key=String(r.iso_date||r.date||r.label||'');if(!key)return;totals.set(key,(totals.get(key)||0)+Number(r.net_sales||0));}));
+  const start=parseIsoDay(data?.filter_start_iso||data?.available_start_iso),end=parseIsoDay(data?.filter_end_iso||data?.available_end_iso);
+  if(start&&end&&start<=end){
+    const rows=[];const cur=new Date(start.getTime());
+    while(cur<=end){const iso=formatIsoDay(cur);const display=formatDisplayDay(cur);rows.push({date:display,label:display,day:cur.getDate(),value:totals.get(iso)||totals.get(display)||0});cur.setDate(cur.getDate()+1);}
+    return rows;
+  }
+  return Array.from(totals.entries()).map(([key,value])=>({date:key,label:key,day:key,value}));
+}
+function renderPharmacyDailySalesChart(data){
+  return renderDailySalesChart(buildPharmacyDailySalesRows(data),{title:'المبيعات اليومية للصيدلية',subtitle:'أهم شارت في التقرير: إجمالي صافي المبيعات اليومية للصيدلية خلال الفترة المختارة.',panelClass:'doctor-daily-chart-panel pharmacy-daily-chart-panel',important:true});
+}
+function renderDoctorDailySalesChart(doctor){
+  const rows=(doctor?.daily_sales||[]).map(x=>({label:String(x.label||x.date||''),day:String(x.day||''),date:String(x.date||''),value:Number(x.net_sales||0)}));
+  return renderDailySalesChart(rows,{title:'المبيعات اليومية خلال الشهر',subtitle:'رسم يومي لصافي مبيعات الدكتور حسب أيام الفترة المختارة.',panelClass:'doctor-daily-chart-panel'});
+}
+function renderReportBuilderCharts(data){
+  if(!data)return '<section class="panel"><div class="empty">ارفع تقرير المبيعات أولًا حتى تظهر الشارتات في التقرير الشامل.</div></section>';
+  return `<section class="panel report-builder-charts-head"><div class="section-head"><div><h3>Charts التقرير الشامل</h3><div class="muted">أول شارت يوضح حركة الصيدلية اليومية، وبعده شارتات مبيعات الدكاترة حسب نفس الفترة.</div></div><span class="badge badge-green">${esc(data.period_start||'—')} → ${esc(data.period_end||'—')}</span></div></section>${renderPharmacyDailySalesChart(data)}${renderDoctorSalesCharts(data)}`;
 }
 
 function doctorSalesFilteredRows(){
@@ -1429,7 +1457,8 @@ async function reportBuilderView(main){
   main.innerHTML=`<div class="page-head"><div><h2>📊 صناعة تقرير شامل</h2><div class="muted">تقرير إداري مرن لأي فترة يعتمد على التحليلات الموجودة في Abdo Debts.</div></div><div class="page-head-actions"><button class="btn btn-soft" id="reportDraftSave">💾 حفظ مسودة</button><button class="btn btn-primary" id="reportBuilderPdf">🧾 إنشاء PDF</button></div></div>
   <section class="panel report-drafts-panel"><div class="report-drafts-head"><strong>📂 المسودات المحفوظة</strong><button class="btn btn-soft btn-sm" id="refreshDrafts">تحديث</button></div><div class="report-drafts-list">${(state.reportBuilderDrafts||[]).length?(state.reportBuilderDrafts.map(d=>`<div class="draft-card"><div><strong>${esc(d.title||'مسودة تقرير')}</strong><small>${esc(d.report_period_start||'')} → ${esc(d.report_period_end||'')}</small><small>${esc(d.prepared_by||'بدون معد التقرير')}</small></div><div><button class="btn btn-soft btn-sm" data-open-draft="${esc(d.id)}">فتح</button><button class="btn btn-danger btn-sm" data-delete-draft="${esc(d.id)}">حذف</button></div></div>`).join('')):'لا توجد مسودات محفوظة'}</div></section>
   <section class="panel report-builder-manual"><div class="field"><label>الأشياء المنجزة خلال الفترة (يدوي)</label><textarea class="textarea" id="reportAchievements" placeholder="اكتب الإنجازات...">${esc(state.reportBuilderAchievements)}</textarea></div><div class="field"><label>خطة الفترة القادمة (يدوي)</label><textarea class="textarea" id="reportPlan" placeholder="اكتب الخطة القادمة...">${esc(state.reportBuilderPlan)}</textarea></div><div class="field"><label>غيابات الموظفين (يدوي)</label><textarea class="textarea" id="reportAbsences" placeholder="اكتب الغيابات...">${esc(state.reportBuilderAbsences)}</textarea></div><div class="field"><label>المشاكل (يدوي)</label><textarea class="textarea" id="reportProblems" placeholder="اكتب المشاكل...">${esc(state.reportBuilderProblems)}</textarea></div><div class="field"><label>الملاحظات (يدوي)</label><textarea class="textarea" id="reportNotes" placeholder="اكتب الملاحظات...">${esc(state.reportBuilderNotes)}</textarea></div><div class="field"><label>مُعد التقرير (يدوي)</label><input class="input" id="reportPreparedBy" value="${esc(state.reportBuilderPreparedBy)}" placeholder="اسم معد التقرير"></div></section>
-  <section class="panel"><div class="empty">يتم استخدام آخر تحليل مبيعات محمل، وحركة الأصناف المحملة، ومقارنة الفترات إن كانت متوفرة. الفترة الحالية: ${esc(state.doctorSalesAnalysis?.period_start||'—')} → ${esc(state.doctorSalesAnalysis?.period_end||'—')}</div></section>`;
+  <section class="panel"><div class="empty">يتم استخدام آخر تحليل مبيعات محمل، وحركة الأصناف المحملة، ومقارنة الفترات إن كانت متوفرة. الفترة الحالية: ${esc(state.doctorSalesAnalysis?.period_start||'—')} → ${esc(state.doctorSalesAnalysis?.period_end||'—')}</div></section>
+  ${renderReportBuilderCharts(state.doctorSalesAnalysis)}`;
   document.getElementById('reportAchievements').oninput=e=>state.reportBuilderAchievements=e.target.value;
   document.getElementById('reportPlan').oninput=e=>state.reportBuilderPlan=e.target.value;
   document.getElementById('reportAbsences').oninput=e=>state.reportBuilderAbsences=e.target.value;

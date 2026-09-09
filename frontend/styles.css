@@ -168,3 +168,10 @@
 .doctor-daily-chart .dots circle{fill:#fff;stroke:var(--green);stroke-width:2}
 .doctor-daily-chart .x-axis text{font-size:10px;fill:#60726d;text-anchor:middle;font-weight:800}
 @media(max-width:700px){.doctor-daily-chart-panel{padding:12px}.doctor-daily-chart-head{flex-direction:column}.doctor-daily-chart-stats{justify-content:flex-start}.doctor-daily-chart-stats span{font-size:9px;padding:5px 8px}.doctor-daily-chart-scroll{margin:0 -4px;padding-bottom:8px}.doctor-daily-chart{height:230px}}
+/* V61 — comprehensive report charts */
+.report-builder-charts-head{margin-top:14px;background:#fbfefd}
+.pharmacy-daily-chart-panel{border:1px solid rgba(15,76,69,.16);box-shadow:0 12px 30px rgba(15,76,69,.08)}
+.report-main-daily-chart .doctor-daily-chart-head h3{font-size:18px}
+.report-main-daily-chart .doctor-daily-chart .line{stroke-width:3.5}
+.report-main-daily-chart .doctor-daily-chart .bars rect{fill:#d3e8e2}
+@media(max-width:700px){.report-builder-charts-head{margin-top:10px}.report-main-daily-chart .doctor-daily-chart-head h3{font-size:16px}}
