@@ -447,7 +447,7 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
     if not include_balance and not branch_id:
         return [{**supplier, "categories": categories_by_supplier.get(supplier.get("id"), [])} for supplier in (suppliers or [])]
 
-    inv_params: dict[str, str] = {"select": "supplier_id,balance,invoice_date", "limit": "10000"}
+    inv_params: dict[str, str] = {"select": "supplier_id,branch_id,balance,invoice_date", "limit": "10000"}
     inv_params = apply_branch_filter(inv_params, profile)
     if branch_id:
         require_branch_access(profile, branch_id)
@@ -459,11 +459,15 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
     balances: dict[str, float] = {}
     oldest_open_invoice: dict[str, date] = {}
     suppliers_in_branch: set[str] = set()
+    supplier_branch_ids: dict[str, set[str]] = {}
     for inv in invoices or []:
         sid = inv.get("supplier_id")
         if not sid:
             continue
+        bid = inv.get("branch_id")
         suppliers_in_branch.add(sid)
+        if bid:
+            supplier_branch_ids.setdefault(sid, set()).add(bid)
         balance = float(inv.get("balance") or 0)
         balances[sid] = balances.get(sid, 0.0) + balance
         if balance <= 0 or not inv.get("invoice_date"):
@@ -476,7 +480,15 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
         if previous is None or invoice_date < previous:
             oldest_open_invoice[sid] = invoice_date
 
-    suppliers_in_branch.update(external_by_supplier.keys())
+    for ext in external_rows or []:
+        sid = ext.get("supplier_id")
+        bid = ext.get("branch_id")
+        if sid:
+            suppliers_in_branch.add(sid)
+            if bid:
+                supplier_branch_ids.setdefault(sid, set()).add(bid)
+    branch_rows = await sb("GET", "/rest/v1/branches", service=True, params={"select": "id,name", "active": "eq.true", "limit": "1000"})
+    branch_name_by_id = {row.get("id"): row.get("name") for row in (branch_rows or []) if row.get("id")}
     today = date.today()
     rows = []
     for supplier in suppliers or []:
@@ -491,6 +503,8 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
             "debt_state": _debt_state(signed_balance),
             "debt_label": "دين لنا" if signed_balance > 0 else ("دين علينا" if signed_balance < 0 else "بدون دين"),
             "import_reference_no": external.get("reference_no"),
+            "branch_ids": sorted(list(supplier_branch_ids.get(supplier.get("id"), set())), key=lambda bid: branch_name_by_id.get(bid, "")),
+            "branch_names": [branch_name_by_id.get(bid, "فرع غير معروف") for bid in sorted(list(supplier_branch_ids.get(supplier.get("id"), set())), key=lambda bid: branch_name_by_id.get(bid, ""))],
             "aging_days": (
                 max(0, (today - oldest_open_invoice[supplier.get("id")]).days)
                 if supplier.get("id") in oldest_open_invoice else None

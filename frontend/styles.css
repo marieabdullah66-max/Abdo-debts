@@ -191,3 +191,9 @@
 .debt-state-badge.debt_on_us{background:#fff1f0;border-color:#ffd1cc}.debt-state-badge.debt_for_us{background:#ecfdf3;border-color:#bfe8cf}.debt-state-badge.no_debt{background:#f4f6f5;border-color:#d8dfdc}
 .debt-total-parts{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end;font-size:14px}.debt-total-parts b{white-space:nowrap}
 @media(max-width:700px){.debt-total-parts{justify-content:flex-start;font-size:12px;gap:7px}.supplierImportState .debt-state-badge{font-size:11px;padding:3px 7px}}
+
+
+/* V68 - supplier branch tags in suppliers list */
+.supplier-branch-tags{display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-start}
+.branch-chip{display:inline-flex;align-items:center;justify-content:center;border:1px solid #d7e8e3;background:#eef8f5;color:#0f6259;border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700;line-height:1.2;white-space:nowrap}
+.item-meta .supplier-branch-tags{justify-content:flex-start}
