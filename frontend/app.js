@@ -1620,11 +1620,12 @@ function supplierAgingBadge(days){
 async function suppliersView(main){
   const branchId=state.supplierBranchId||'',categoryId=state.supplierCategoryId||'';
   state.supplierRows=await api(branchId?`/api/suppliers?include_balance=true&branch_id=${encodeURIComponent(branchId)}`:'/api/suppliers?include_balance=true');
-  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions">${can('manage_suppliers')?'<button class="btn btn-danger" id="resetSupplierValues">حذف قيم الفرع</button><button class="btn btn-soft" id="importSuppliers">استيراد CSV/Excel</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
+  main.innerHTML=`<div class="page-head"><div><h2>الموردين</h2><div class="muted"><span id="supplierCount">${state.supplierRows.length}</span> مورد</div></div><div class="page-head-actions"><button class="btn btn-soft" id="exportSuppliersPdf">تصدير PDF</button>${can('manage_suppliers')?'<button class="btn btn-danger" id="resetSupplierValues">حذف قيم الفرع</button><button class="btn btn-soft" id="importSuppliers">استيراد CSV/Excel</button><button class="btn btn-primary" id="addSupplier">+ مورد</button>':''}</div></div>
   <div class="toolbar supplier-toolbar"><input id="supplierSearch" class="input" placeholder="بحث باسم المورد..."><select id="supplierBranchFilter" class="select">${branchOptions(true,false)}</select><select id="supplierCategoryFilter" class="select"><option value="">كل التصنيفات</option>${state.categories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><select id="supplierDebtStateFilter" class="select"><option value="">كل حالات الدين</option><option value="debt_on_us">دين علينا</option><option value="debt_for_us">دين لنا</option><option value="no_debt">بدون دين</option></select><select id="supplierSortFilter" class="select"><option value="balance_desc">الأعلى قيمة</option><option value="balance_asc">الأقل قيمة</option><option value="aging_desc">أكبر Aging</option><option value="aging_asc">أقل Aging</option><option value="name_asc">الاسم أ-ي</option></select></div>
   <div class="supplier-debt-total"><div><span>ملخص حالات الدين</span><small id="supplierDebtScope">${branchId?'للفرع المحدد':'لكل الفروع'}</small></div><strong class="money" id="supplierDebtTotal">${money(0)}</strong></div>
   <div id="supplierRows"></div>`;
   const branchSelect=document.getElementById('supplierBranchFilter'),categorySelect=document.getElementById('supplierCategoryFilter'),debtStateSelect=document.getElementById('supplierDebtStateFilter'),sortSelect=document.getElementById('supplierSortFilter');branchSelect.value=branchId;categorySelect.value=categoryId;debtStateSelect.value=state.supplierDebtState||'';sortSelect.value=state.supplierSort||'balance_desc';state.supplierCategoryId=categorySelect.value;
+  document.getElementById('exportSuppliersPdf').onclick=()=>exportSuppliersPdf();
   if(can('manage_suppliers')){document.getElementById('addSupplier').onclick=()=>supplierModal(null,async()=>refreshSupplierRows());document.getElementById('importSuppliers').onclick=()=>supplierImportModal();document.getElementById('resetSupplierValues').onclick=()=>resetSupplierValuesModal();}
   document.getElementById('supplierSearch').oninput=renderSupplierRows;
   categorySelect.onchange=()=>{state.supplierCategoryId=categorySelect.value;renderSupplierRows();};
@@ -1669,6 +1670,7 @@ function renderSupplierRows(){
     if(sortBy==='name_asc')return String(a.name||'').localeCompare(String(b.name||''),'ar');
     return absB-absA||ageB-ageA;
   });
+  state.visibleSupplierRows=rows;
   const count=document.getElementById('supplierCount');if(count)count.textContent=rows.length;
   const totals=rows.reduce((acc,s)=>{const bal=Number(s.balance||0);if(bal>0)acc.forUs+=bal;else if(bal<0)acc.onUs+=Math.abs(bal);else acc.zero+=1;return acc;},{forUs:0,onUs:0,zero:0});
   const total=document.getElementById('supplierDebtTotal');if(total)total.innerHTML=`<span class="debt-total-parts"><b class="debt-on-us">علينا: ${money(totals.onUs)}</b><b class="debt-for-us">لنا: ${money(totals.forUs)}</b><b class="no-debt">بدون دين: ${Number(totals.zero).toLocaleString('en-US')}</b></span>`;
@@ -1680,6 +1682,34 @@ function renderSupplierRows(){
   box.querySelectorAll('[data-supplier-plan]').forEach(b=>b.onclick=()=>openSupplierPaymentPlanModal(b.dataset.supplierPlan));
   box.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>supplierModal(state.suppliers.find(s=>s.id===b.dataset.edit)||state.supplierRows.find(s=>s.id===b.dataset.edit),async()=>refreshSupplierRows()));
   box.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف المورد؟'))return;try{await api(`/api/suppliers/${b.dataset.delete}`,{method:'DELETE'});state.suppliers=await api('/api/suppliers');toast('تم حذف المورد');await refreshSupplierRows();}catch(e){toast(e.message,true);}});
+}
+
+
+function supplierBranchPlainText(s){
+  const names=(s?.branch_names||[]).filter(Boolean);
+  if(names.length)return names.join('، ');
+  const selected=state.branches.find(b=>b.id===(state.supplierBranchId||''));
+  return selected?.name||'—';
+}
+function supplierCategoriesPlainText(s){return (s?.categories||[]).map(c=>c.name).filter(Boolean).join('، ')||'بدون تصنيف';}
+function supplierFilterText(){
+  const branch=document.getElementById('supplierBranchFilter')?.selectedOptions?.[0]?.textContent?.trim()||'كل الفروع';
+  const category=document.getElementById('supplierCategoryFilter')?.selectedOptions?.[0]?.textContent?.trim()||'كل التصنيفات';
+  const debt=document.getElementById('supplierDebtStateFilter')?.selectedOptions?.[0]?.textContent?.trim()||'كل حالات الدين';
+  const sort=document.getElementById('supplierSortFilter')?.selectedOptions?.[0]?.textContent?.trim()||'الأعلى قيمة';
+  const search=(document.getElementById('supplierSearch')?.value||'').trim();
+  return {branch,category,debt,sort,search:search||'—'};
+}
+function exportSuppliersPdf(){
+  const rows=state.visibleSupplierRows||[];
+  if(!rows.length){toast('لا توجد نتائج لتصديرها حسب الفلاتر الحالية',true);return;}
+  const popup=window.open('','_blank');
+  if(!popup){toast('المتصفح منع نافذة التصدير. اسمح بالنوافذ المنبثقة وحاول من جديد.',true);return;}
+  const f=supplierFilterText();
+  const totals=rows.reduce((acc,s)=>{const bal=Number(s.balance||0);if(bal>0)acc.forUs+=bal;else if(bal<0)acc.onUs+=Math.abs(bal);else acc.zero+=1;return acc;},{forUs:0,onUs:0,zero:0});
+  const rowHtml=rows.map((s,i)=>`<tr><td>${i+1}</td><td class="name"><strong>${esc(s.name)}</strong></td><td>${esc(supplierCategoriesPlainText(s))}</td><td>${esc(supplierDebtLabel(Number(s.balance||0)))}</td><td class="money ${supplierDebtState(s.balance)}">${esc(supplierDebtMoney(s.balance))}</td><td>${s.aging_days==null||s.aging_days===''?'—':`${Number(s.aging_days||0).toLocaleString('en-US')} يوم`}</td><td>${esc(s.phone||'-')}</td><td>${esc(supplierBranchPlainText(s))}</td></tr>`).join('');
+  popup.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير الموردين</title><style>@page{size:A4 landscape;margin:9mm}*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}body{font-family:Tahoma,Arial,sans-serif;color:#173b36;margin:0;direction:rtl;background:#fff}.head{display:flex;justify-content:space-between;gap:20px;border-bottom:3px solid #0f6259;padding-bottom:8px;margin-bottom:10px}.head h1{margin:0;color:#0f6259;font-size:22px}.meta{font-size:10px;color:#60736e;line-height:1.8}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:10px 0}.card{border:1px solid #d7e2df;border-radius:8px;padding:8px;background:#f8fbfa}.card span{display:block;color:#667872;font-size:9px}.card strong{display:block;margin-top:2px;font-size:13px;color:#0f6259}.filters{background:#eef7f4;border:1px solid #d7e2df;border-radius:8px;padding:7px 9px;margin-bottom:9px;font-size:10px;line-height:1.8}table{width:100%;border-collapse:collapse;font-size:9px;table-layout:fixed}th,td{border:1px solid #dbe5e2;padding:5px;text-align:center;vertical-align:middle;word-break:break-word}th{background:#0f6259;color:#fff}.name{text-align:right}.money{direction:ltr;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:700}.debt_on_us{color:#bf1d1d}.debt_for_us{color:#00765d}.no_debt{color:#60736e}tbody tr:nth-child(even){background:#f7faf9}.foot{font-size:8px;color:#75837f;margin-top:7px;display:flex;justify-content:space-between}.no-print{text-align:center;margin-top:10px}@media print{.no-print{display:none}}</style></head><body><div class="head"><div><h1>تقرير الموردين</h1><div class="meta">تصدير حسب الفلاتر الحالية في صفحة الموردين<br>عدد النتائج: <strong>${rows.length.toLocaleString('en-US')}</strong></div></div><div class="meta">Abdo Debts<br>تاريخ التصدير: ${esc(doctorPdfGeneratedAt())}</div></div><div class="cards"><div class="card"><span>عدد الموردين</span><strong>${rows.length.toLocaleString('en-US')}</strong></div><div class="card"><span>إجمالي دين علينا</span><strong class="money debt_on_us">${money(totals.onUs)}</strong></div><div class="card"><span>إجمالي دين لنا</span><strong class="money debt_for_us">${money(totals.forUs)}</strong></div><div class="card"><span>بدون دين</span><strong>${Number(totals.zero).toLocaleString('en-US')}</strong></div></div><div class="filters">الفرع: <strong>${esc(f.branch)}</strong> · التصنيف: <strong>${esc(f.category)}</strong> · حالة الدين: <strong>${esc(f.debt)}</strong> · الفرز: <strong>${esc(f.sort)}</strong> · البحث: <strong>${esc(f.search)}</strong></div><table><thead><tr><th style="width:34px">#</th><th style="width:22%">المورد</th><th>التصنيفات</th><th>حالة الدين</th><th>القيمة</th><th>Aging</th><th>الهاتف</th><th>الفرع</th></tr></thead><tbody>${rowHtml}</tbody></table><div class="foot"><span>التقرير يعرض نفس نتائج الفلاتر الحالية فقط.</span><span>Abdo Debts</span></div><div class="no-print"><button onclick="print()" style="padding:8px 18px;border:0;border-radius:8px;background:#0f6259;color:white;font:inherit">حفظ كـ PDF / طباعة</button></div></body></html>`);
+  popup.document.close();toast('تم تجهيز PDF الموردين.');setTimeout(()=>{try{popup.focus();popup.print();}catch{}},450);
 }
 
 function openSupplierPaymentPlanModal(supplierId){
