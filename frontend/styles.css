@@ -197,3 +197,11 @@
 .supplier-branch-tags{display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-start}
 .branch-chip{display:inline-flex;align-items:center;justify-content:center;border:1px solid #d7e8e3;background:#eef8f5;color:#0f6259;border-radius:999px;padding:4px 8px;font-size:12px;font-weight:700;line-height:1.2;white-space:nowrap}
 .item-meta .supplier-branch-tags{justify-content:flex-start}
+/* V72 - persistent purchase archive inside item movement analysis */
+.purchase-archive-box{margin:10px 0 12px}
+.purchase-archive-panel{display:flex;justify-content:space-between;gap:12px;align-items:center;border-color:#d8e8e3;background:#fbfefd}
+.purchase-archive-panel>div:first-child{display:flex;flex-direction:column;gap:4px}
+.purchase-archive-panel strong{color:#0f6259}
+.purchase-archive-panel span,.purchase-archive-panel small{color:#61736f}
+.text-danger{color:#c62828!important}
+@media(max-width:760px){.purchase-archive-panel{align-items:stretch;flex-direction:column}.purchase-archive-panel .actions{display:flex;gap:8px;flex-wrap:wrap}}

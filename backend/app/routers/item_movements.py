@@ -695,7 +695,7 @@ async def report_detail(report_id: str, profile: dict[str, Any] = Depends(curren
         batch = await sb(
             "GET", "/rest/v1/item_movement_rows", service=True,
             params={
-                "select": "id,report_name,item_id,boxes_sold,loose_sold,units_per_box,equivalent_boxes,daily_rate,matched_by,item_catalog(item_code,item_name)",
+                "select": "id,report_name,report_name_norm,item_id,boxes_sold,loose_sold,units_per_box,equivalent_boxes,daily_rate,matched_by,item_catalog(item_code,item_name)",
                 "report_id": f"eq.{report_id}", "order": "daily_rate.desc.nullslast,report_name.asc",
             },
             headers={"Range": f"{offset}-{offset + 999}"},
