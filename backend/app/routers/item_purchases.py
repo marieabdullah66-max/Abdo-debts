@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 
 from ..core import apply_branch_filter, current_profile, require_branch_access, require_permission, sb
 from .item_movements import (
@@ -193,6 +193,124 @@ async def _parse_purchase_file(file: UploadFile) -> dict[str, Any]:
     }
 
 
+def _purchase_stats_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {
+            "period_start": None,
+            "period_end": None,
+            "row_count": 0,
+            "unique_item_count": 0,
+            "unresolved_count": 0,
+            "blocking_count": 0,
+            "total_purchase_value": 0,
+            "total_equivalent_boxes": 0,
+        }
+    dates: list[date] = []
+    for x in rows:
+        value = x.get("purchase_date")
+        if isinstance(value, date):
+            dates.append(value)
+        elif value:
+            parsed = _purchase_line_date(value)
+            if parsed:
+                dates.append(parsed)
+    unique_keys = {x.get("item_id") or x.get("report_name_norm") for x in rows}
+    return {
+        "period_start": min(dates).isoformat() if dates else None,
+        "period_end": max(dates).isoformat() if dates else None,
+        "row_count": len(rows),
+        "unique_item_count": len(unique_keys),
+        "unresolved_count": sum(1 for x in rows if not x.get("item_id")),
+        "blocking_count": sum(1 for x in rows if not x.get("item_id") and float(x.get("loose_purchased") or 0) != 0),
+        "total_purchase_value": round(sum(float(x.get("purchase_value") or 0) for x in rows), 4),
+        "total_equivalent_boxes": round(sum(float(x.get("equivalent_boxes") or 0) for x in rows), 4),
+    }
+
+
+def _purchase_insert_payload(rows: list[dict[str, Any]], archive_id: str, branch_id: str) -> list[dict[str, Any]]:
+    payload = []
+    for row in rows:
+        purchase_date = row.get("purchase_date")
+        if isinstance(purchase_date, str):
+            purchase_date = datetime.strptime(purchase_date[:10], "%Y-%m-%d").date()
+        payload.append({
+            "import_id": archive_id,
+            "branch_id": branch_id,
+            "purchase_date": purchase_date.isoformat(),
+            "supplier_name": str(row.get("supplier_name") or "")[:240] or None,
+            "invoice_number": str(row.get("invoice_number") or "")[:120] or None,
+            "report_name": str(row.get("report_name") or "")[:300],
+            "report_name_norm": str(row.get("report_name_norm") or "")[:300],
+            "item_id": row.get("item_id"),
+            "unit": row.get("unit") or BOX_UNIT,
+            "quantity": row.get("quantity") or 0,
+            "boxes_purchased": row.get("boxes_purchased") or 0,
+            "loose_purchased": row.get("loose_purchased") or 0,
+            "units_per_box": row.get("units_per_box"),
+            "equivalent_boxes": row.get("equivalent_boxes"),
+            "purchase_value": row.get("purchase_value") or 0,
+            "matched_by": row.get("matched_by") or "unmatched",
+        })
+    return payload
+
+
+def _purchase_lines_from_client(raw_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    for raw in raw_lines or []:
+        item_name = _text(raw.get("report_name"))
+        purchase_date = _purchase_line_date(raw.get("purchase_date"))
+        quantity = _number(raw.get("quantity"))
+        if not item_name or not purchase_date or quantity is None or quantity == 0:
+            continue
+        unit = _text(raw.get("unit")) or BOX_UNIT
+        if unit not in {BOX_UNIT, LOOSE_UNIT}:
+            unit = BOX_UNIT
+        price = _number(raw.get("price")) or 0.0
+        report_name_norm = _normalize_name(item_name)
+        lines.append({
+            "purchase_date": purchase_date,
+            "supplier_name": _text(raw.get("supplier_name")),
+            "invoice_number": _text(raw.get("invoice_number")),
+            "report_name": item_name,
+            "report_name_norm": report_name_norm,
+            "report_code": _text(raw.get("report_code")),
+            "unit": unit,
+            "quantity": float(quantity),
+            "price": float(price),
+            "purchase_value": round(float(price) * float(quantity), 6),
+        })
+    return lines
+
+
+async def _create_purchase_archive(branch_id: str, meta: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    existing = await sb(
+        "GET", "/rest/v1/item_purchase_imports", service=True,
+        params={"select": "id", "branch_id": f"eq.{branch_id}", "limit": "100"},
+    )
+    for old in existing or []:
+        await sb("DELETE", "/rest/v1/item_purchase_imports", service=True, params={"id": f"eq.{old['id']}"})
+    period_start = _text(meta.get("period_start")) or date.today().isoformat()
+    period_end = _text(meta.get("period_end")) or period_start
+    created = await sb(
+        "POST", "/rest/v1/item_purchase_imports", service=True,
+        headers={"Prefer": "return=representation"},
+        json={
+            "branch_id": branch_id,
+            "source_name": _text(meta.get("source_name")) or None,
+            "source_filename": (_text(meta.get("source_filename")) or "")[:240] or None,
+            "period_start": period_start,
+            "period_end": period_end,
+            "row_count": int(float(meta.get("row_count") or 0)),
+            "unique_item_count": int(float(meta.get("unique_item_count") or 0)),
+            "unresolved_count": int(float(meta.get("unresolved_count") or 0)),
+            "total_purchase_value": float(meta.get("total_purchase_value") or 0),
+            "total_equivalent_boxes": float(meta.get("total_equivalent_boxes") or 0),
+            "created_by": profile["id"],
+        },
+    )
+    return created[0]
+
+
 @router.post("/preview")
 async def preview_purchase_archive(
     branch_id: str = Form(...),
@@ -244,29 +362,89 @@ async def import_purchase_archive(
         },
     )
     archive = created[0]
-    payload = []
-    for row in parsed["rows"]:
-        payload.append({
-            "import_id": archive["id"],
-            "branch_id": branch_id,
-            "purchase_date": row["purchase_date"].isoformat(),
-            "supplier_name": str(row.get("supplier_name") or "")[:240] or None,
-            "invoice_number": str(row.get("invoice_number") or "")[:120] or None,
-            "report_name": row["report_name"][:300],
-            "report_name_norm": row["report_name_norm"][:300],
-            "item_id": row["item_id"],
-            "unit": row["unit"],
-            "quantity": row["quantity"],
-            "boxes_purchased": row["boxes_purchased"],
-            "loose_purchased": row["loose_purchased"],
-            "units_per_box": row["units_per_box"],
-            "equivalent_boxes": row["equivalent_boxes"],
-            "purchase_value": row["purchase_value"],
-            "matched_by": row["matched_by"],
-        })
+    payload = _purchase_insert_payload(parsed["rows"], archive["id"], branch_id)
     for start in range(0, len(payload), 400):
         await sb("POST", "/rest/v1/item_purchase_rows", service=True, headers={"Prefer": "return=minimal"}, json=payload[start:start + 400])
     return {"ok": True, "archive_id": archive["id"], **{k: v for k, v in parsed.items() if k != "rows"}}
+
+
+@router.post("/chunk/start")
+async def start_purchase_archive_chunked(payload: dict[str, Any] = Body(...), profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    require_permission(profile, "manage_item_catalog")
+    branch_id = _text(payload.get("branch_id"))
+    if not branch_id:
+        raise HTTPException(422, "اختر الفرع أولًا")
+    require_branch_access(profile, branch_id)
+    archive = await _create_purchase_archive(branch_id, payload.get("meta") or {}, profile)
+    return {"ok": True, "archive_id": archive["id"]}
+
+
+@router.post("/chunk/rows")
+async def import_purchase_archive_chunk_rows(payload: dict[str, Any] = Body(...), profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    require_permission(profile, "manage_item_catalog")
+    branch_id = _text(payload.get("branch_id"))
+    archive_id = _text(payload.get("archive_id"))
+    if not branch_id or not archive_id:
+        raise HTTPException(422, "بيانات الأرشيف غير كاملة")
+    require_branch_access(profile, branch_id)
+    archives = await sb(
+        "GET", "/rest/v1/item_purchase_imports", service=True,
+        params={"select": "id,branch_id", "id": f"eq.{archive_id}", "branch_id": f"eq.{branch_id}", "limit": "1"},
+    )
+    if not archives:
+        raise HTTPException(404, "أرشيف المشتريات غير موجود")
+    lines = _purchase_lines_from_client(payload.get("rows") or [])
+    if not lines:
+        return {"ok": True, "inserted": 0}
+    resolved = await _resolve_purchase_lines(lines)
+    insert_payload = _purchase_insert_payload(resolved, archive_id, branch_id)
+    for start in range(0, len(insert_payload), 400):
+        await sb("POST", "/rest/v1/item_purchase_rows", service=True, headers={"Prefer": "return=minimal"}, json=insert_payload[start:start + 400])
+    return {"ok": True, "inserted": len(insert_payload)}
+
+
+@router.post("/chunk/finish")
+async def finish_purchase_archive_chunked(payload: dict[str, Any] = Body(...), profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    require_permission(profile, "manage_item_catalog")
+    branch_id = _text(payload.get("branch_id"))
+    archive_id = _text(payload.get("archive_id"))
+    if not branch_id or not archive_id:
+        raise HTTPException(422, "بيانات الأرشيف غير كاملة")
+    require_branch_access(profile, branch_id)
+    archives = await sb(
+        "GET", "/rest/v1/item_purchase_imports", service=True,
+        params={"select": "id,branch_id", "id": f"eq.{archive_id}", "branch_id": f"eq.{branch_id}", "limit": "1"},
+    )
+    if not archives:
+        raise HTTPException(404, "أرشيف المشتريات غير موجود")
+    rows: list[dict[str, Any]] = []
+    for offset in range(0, 100000, 1000):
+        batch = await sb(
+            "GET", "/rest/v1/item_purchase_rows", service=True,
+            params={"select": "purchase_date,item_id,report_name_norm,loose_purchased,equivalent_boxes,purchase_value", "import_id": f"eq.{archive_id}", "branch_id": f"eq.{branch_id}"},
+            headers={"Range": f"{offset}-{offset + 999}"},
+        )
+        rows.extend(batch or [])
+        if len(batch or []) < 1000:
+            break
+    stats = _purchase_stats_from_rows(rows)
+    if not stats["period_start"] or not stats["period_end"]:
+        raise HTTPException(422, "لم يتم حفظ أي صف مشتريات")
+    await sb(
+        "PATCH", "/rest/v1/item_purchase_imports", service=True,
+        params={"id": f"eq.{archive_id}"},
+        headers={"Prefer": "return=minimal"},
+        json={
+            "period_start": stats["period_start"],
+            "period_end": stats["period_end"],
+            "row_count": stats["row_count"],
+            "unique_item_count": stats["unique_item_count"],
+            "unresolved_count": stats["unresolved_count"],
+            "total_purchase_value": stats["total_purchase_value"],
+            "total_equivalent_boxes": stats["total_equivalent_boxes"],
+        },
+    )
+    return {"ok": True, "archive_id": archive_id, **stats}
 
 
 @router.get("/archive")

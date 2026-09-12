@@ -1371,14 +1371,80 @@ async function loadMovementPurchaseSummary(){
     state.movementRows=(state.movementRows||[]).map(x=>({...x,purchase:map[x.item_id?`item:${x.item_id}`:`name:${x.report_name_norm||''}`]||null}));
   }catch(e){state.movementPurchaseSummary={error:e.message,rows:[],summary:{}};}
 }
+
+function purchaseCsvParse(text){
+  const rows=[];let row=[],field='',q=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i],n=text[i+1];
+    if(q){
+      if(ch==='"'&&n==='"'){field+='"';i++;}
+      else if(ch==='"'){q=false;}
+      else field+=ch;
+    }else{
+      if(ch==='"')q=true;
+      else if(ch===','){row.push(field);field='';}
+      else if(ch==='\n'){row.push(field);rows.push(row);row=[];field='';}
+      else if(ch==='\r'){}
+      else field+=ch;
+    }
+  }
+  if(field!==''||row.length){row.push(field);rows.push(row);}
+  return rows;
+}
+function purchaseText(v){return String(v??'').trim();}
+function purchaseNum(v){let t=purchaseText(v).replace(/,/g,'');if(!t)return null;let neg=false;if(t.endsWith('-')){neg=true;t=t.slice(0,-1);}const n=Number(t);return Number.isFinite(n)?(neg?-n:n):null;}
+function purchaseIsoDate(v){const t=purchaseText(v).split(' ')[0];let m=t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);if(m){const mm=m[1].padStart(2,'0'),dd=m[2].padStart(2,'0'),yy=m[3];return `${yy}-${mm}-${dd}`;}m=t.match(/^(\d{4})-(\d{2})-(\d{2})$/);return m?t:'';}
+function purchaseRowValue(row,header,offset=9){const idx=row.findIndex(v=>purchaseText(v)===header);const pos=idx+offset;return idx>=0&&pos<row.length?purchaseText(row[pos]):'';}
+function purchaseUnit(row){for(const idx of [28,29,11]){const v=purchaseText(row[idx]);if(v==='علبة'||v==='فرط')return v;}return 'علبة';}
+function purchaseParseFileRows(rows,fileName=''){
+  let sourceName=rows?.[0]?.[2]||rows?.[0]?.[0]||'';
+  let currentDate='',currentInvoice='',currentSupplier='',skipped=0;const lines=[];const dates=[];
+  for(const row of rows){
+    const rd=row.length>30?purchaseIsoDate(row[30]):'';if(rd){currentDate=rd;dates.push(rd);} 
+    if(row.length>31&&purchaseText(row[31])&&purchaseText(row[31])!=='0')currentInvoice=purchaseText(row[31]);
+    if(row.length>26&&purchaseText(row[26])&&purchaseText(row[26])!=='0')currentSupplier=purchaseText(row[26]);
+    const itemName=purchaseRowValue(row,'اسم الصنف'),quantity=purchaseNum(purchaseRowValue(row,'الكمية')),price=purchaseNum(purchaseRowValue(row,'السعر'))||0;
+    if(!itemName||quantity===null||quantity===0)continue;
+    if(!currentDate){skipped++;continue;}
+    const movementType=purchaseRowValue(row,'نوع ورقم الفاتورة') || purchaseText(row[24]);
+    const sign=(movementType.includes('مردود')||movementType.includes('مرتجع'))?-1:1;
+    const qty=Number(quantity)*sign;
+    lines.push({purchase_date:currentDate,supplier_name:currentSupplier,invoice_number:currentInvoice,report_name:itemName,report_code:'',unit:purchaseUnit(row),quantity:qty,price:Number(price)});
+  }
+  if(!lines.length)throw new Error('لم نجد أصناف مشتريات صالحة داخل التقرير');
+  const lineDates=lines.map(x=>x.purchase_date).filter(Boolean).sort();
+  return {source_name:sourceName,source_filename:fileName,period_start:lineDates[0],period_end:lineDates[lineDates.length-1],row_count:lines.length,skipped_rows:skipped,lines};
+}
+async function purchaseReadClientFile(file){
+  const text=await file.text();
+  return purchaseParseFileRows(purchaseCsvParse(text),file.name||'');
+}
+async function importPurchaseArchiveChunked(form,preview,previewBox){
+  const branchId=String(form.elements.branch_id.value||'');
+  const rows=preview.lines||[];
+  if(!rows.length)throw new Error('لا توجد صفوف صالحة للحفظ');
+  const chunkSize=300;
+  previewBox.innerHTML=`<div class="loading">جاري إنشاء أرشيف المشتريات...</div>`;
+  const startRes=await api('/api/item-purchases/chunk/start',{method:'POST',body:JSON.stringify({branch_id:branchId,meta:preview}),busyMessage:'جاري إنشاء أرشيف المشتريات...'});
+  const archiveId=startRes.archive_id;let done=0;
+  for(let i=0;i<rows.length;i+=chunkSize){
+    const chunk=rows.slice(i,i+chunkSize);
+    await api('/api/item-purchases/chunk/rows',{method:'POST',body:JSON.stringify({branch_id:branchId,archive_id:archiveId,rows:chunk}),busyMessage:`جاري حفظ المشتريات ${Math.min(i+chunk.length,rows.length).toLocaleString('en-US')} / ${rows.length.toLocaleString('en-US')}`});
+    done+=chunk.length;
+    previewBox.innerHTML=`<div class="movement-preview-note">جاري حفظ المشتريات... ${done.toLocaleString('en-US')} / ${rows.length.toLocaleString('en-US')}</div>`;
+  }
+  previewBox.innerHTML='<div class="loading">جاري اعتماد الأرشيف...</div>';
+  return await api('/api/item-purchases/chunk/finish',{method:'POST',body:JSON.stringify({branch_id:branchId,archive_id:archiveId}),busyMessage:'جاري اعتماد أرشيف المشتريات...'});
+}
+
 function purchaseArchiveModal(){
-  let preview=null;const wrap=showModal('رفع تقرير المشتريات الكامل',`<form id="purchaseArchiveForm" class="form-grid"><div class="field"><label>الفرع *</label><select class="select" name="branch_id" required><option value="">— اختر الفرع —</option>${branchOptions(false,false)}</select></div><div class="field"><label>تقرير المشتريات CSV *</label><input class="input" type="file" name="file" accept=".csv,text/csv" required><div class="hint">ارفع تقرير المشتريات الكامل من أول افتتاح الصيدلية إلى آخر يوم متوفر. سيُحفظ مرة واحدة ويُستخدم تلقائيًا مع تقارير المبيعات الشهرية.</div></div><div class="full"><button class="btn btn-soft" id="previewPurchaseFile" type="button">قراءة التقرير</button></div></form><div id="purchasePreviewBox"><div class="hint">بعد قراءة الملف سيظهر تاريخ المشتريات وعدد الأصناف قبل الحفظ.</div></div>`,async()=>{
+  let preview=null;const wrap=showModal('رفع تقرير المشتريات الكامل',`<form id="purchaseArchiveForm" class="form-grid"><div class="field"><label>الفرع *</label><select class="select" name="branch_id" required><option value="">— اختر الفرع —</option>${branchOptions(false,false)}</select></div><div class="field"><label>تقرير المشتريات CSV *</label><input class="input" type="file" name="file" accept=".csv,text/csv" required><div class="hint">ارفع تقرير المشتريات الكامل مرة واحدة. الملفات الكبيرة تحفظ بدفعات حتى لا يظهر خطأ حجم الطلب.</div></div><div class="full"><button class="btn btn-soft" id="previewPurchaseFile" type="button">قراءة التقرير</button></div></form><div id="purchasePreviewBox"><div class="hint">بعد قراءة الملف سيظهر تاريخ المشتريات وعدد الأصناف قبل الحفظ.</div></div>`,async()=>{
     const form=document.getElementById('purchaseArchiveForm');if(!form.reportValidity())return false;if(!preview){toast('اضغط قراءة التقرير أولًا',true);return false;}
-    const branchId=String(form.elements.branch_id.value||''),fd=new FormData(form);
-    try{const data=await api('/api/item-purchases/import',{method:'POST',body:fd});state.movementBranchId=branchId;state.movementPurchaseArchive=null;state.movementPurchaseSummary=null;toast(`تم حفظ أرشيف المشتريات: ${Number(data.row_count||0).toLocaleString('en-US')} سطر · ${Number(data.unique_item_count||0).toLocaleString('en-US')} صنف`);await loadPurchaseArchive();if(state.movementReportId)await loadMovementReportDetail();return true;}catch(e){toast(e.message,true);return false;}
+    const branchId=String(form.elements.branch_id.value||'');
+    try{const data=await importPurchaseArchiveChunked(form,preview,wrap.querySelector('#purchasePreviewBox'));state.movementBranchId=branchId;state.movementPurchaseArchive=null;state.movementPurchaseSummary=null;toast(`تم حفظ أرشيف المشتريات: ${Number(data.row_count||0).toLocaleString('en-US')} سطر · ${Number(data.unique_item_count||0).toLocaleString('en-US')} صنف`);await loadPurchaseArchive();if(state.movementReportId)await loadMovementReportDetail();return true;}catch(e){toast(e.message,true);return false;}
   },{saveText:'حفظ أرشيف المشتريات',large:true});
   const form=wrap.querySelector('#purchaseArchiveForm'),previewBox=wrap.querySelector('#purchasePreviewBox');if(state.movementBranchId)form.elements.branch_id.value=state.movementBranchId;const reset=()=>{preview=null;previewBox.innerHTML='<div class="hint">اضغط قراءة التقرير للتأكد من الفترة وعدد الأصناف قبل الحفظ.</div>';};form.elements.branch_id.onchange=reset;form.elements.file.onchange=reset;
-  wrap.querySelector('#previewPurchaseFile').onclick=async()=>{if(!form.reportValidity())return;const btn=wrap.querySelector('#previewPurchaseFile');btn.disabled=true;previewBox.innerHTML='<div class="loading">جاري قراءة تقرير المشتريات...</div>';try{const fd=new FormData(form);preview=await api('/api/item-purchases/preview',{method:'POST',body:fd});previewBox.innerHTML=`<div class="movement-preview-grid"><div><span>فترة المشتريات</span><strong>${esc(preview.period_start)} → ${esc(preview.period_end)}</strong></div><div><span>أسطر المشتريات</span><strong>${Number(preview.row_count||0).toLocaleString('en-US')}</strong></div><div><span>الأصناف</span><strong>${Number(preview.unique_item_count||0).toLocaleString('en-US')}</strong></div><div><span>إجمالي العلب</span><strong>${movementNumber(preview.total_equivalent_boxes||0,2)}</strong></div><div><span>تحتاج مطابقة</span><strong>${Number(preview.unresolved_count||0).toLocaleString('en-US')}</strong></div><div><span>القيمة</span><strong>${money(preview.total_purchase_value||0)}</strong></div></div>${preview.source_name?`<div class="hint">اسم المصدر داخل التقرير: ${esc(preview.source_name)}</div>`:''}<div class="movement-preview-note">سيتم حفظ تقرير المشتريات كأرشيف دائم للفرع، وأي تقرير مبيعات شهرية يأخذ مشتريات نفس الفترة تلقائيًا حسب التاريخ.</div>`;}catch(e){preview=null;previewBox.innerHTML=`<div class="empty">${esc(e.message)}</div>`;toast(e.message,true);}finally{btn.disabled=false;}};
+  wrap.querySelector('#previewPurchaseFile').onclick=async()=>{if(!form.reportValidity())return;const btn=wrap.querySelector('#previewPurchaseFile');btn.disabled=true;previewBox.innerHTML='<div class="loading">جاري قراءة تقرير المشتريات داخل الجهاز...</div>';try{const file=form.elements.file.files?.[0];if(!file)throw new Error('اختر ملف المشتريات أولًا');preview=await purchaseReadClientFile(file);previewBox.innerHTML=`<div class="movement-preview-grid"><div><span>فترة المشتريات</span><strong>${esc(preview.period_start)} → ${esc(preview.period_end)}</strong></div><div><span>أسطر المشتريات</span><strong>${Number(preview.row_count||0).toLocaleString('en-US')}</strong></div><div><span>طريقة الحفظ</span><strong>دفعات آمنة</strong></div><div><span>حجم الدفعة</span><strong>300 سطر</strong></div></div>${preview.source_name?`<div class="hint">اسم المصدر داخل التقرير: ${esc(preview.source_name)}</div>`:''}<div class="movement-preview-note">سيتم إرسال التقرير للبرنامج على دفعات صغيرة، وهذا يمنع خطأ Request Entity Too Large.</div>`;}catch(e){preview=null;previewBox.innerHTML=`<div class="empty">${esc(e.message)}</div>`;toast(e.message,true);}finally{btn.disabled=false;}};
 }
 function movementPurchaseFor(row){return row?.purchase||null;}
 function movementPurchaseDiff(row){return Number(movementPurchaseFor(row)?.equivalent_boxes||0)-Number(row?.equivalent_boxes||0);}
