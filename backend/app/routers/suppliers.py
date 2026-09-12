@@ -1,4 +1,5 @@
 from datetime import date
+import asyncio
 import csv
 import io
 import re
@@ -218,14 +219,28 @@ async def _upsert_external_balance(*, supplier_id: str, branch_id: str, signed_b
         raise
 
 
-async def _category_map() -> dict[str, list[dict[str, Any]]]:
-    links = await sb(
-        "GET", "/rest/v1/supplier_category_links", service=True,
-        params={
-            "select": "supplier_id,category_id,supplier_categories(id,name)",
-            "limit": "20000",
-        },
-    )
+def _chunks(values: list[str], size: int = 80):
+    for i in range(0, len(values), size):
+        yield values[i:i + size]
+
+
+async def _category_map(supplier_ids: list[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+    """Load categories, scoped when possible so supplier pages stay fast."""
+    params={"select": "supplier_id,category_id,supplier_categories(id,name)", "limit": "20000"}
+    if supplier_ids:
+        result: dict[str, list[dict[str, Any]]] = {}
+        for ids in _chunks(list(dict.fromkeys([x for x in supplier_ids if x])), 120):
+            rows = await sb("GET", "/rest/v1/supplier_category_links", service=True, params={**params, "supplier_id": f"in.({','.join(ids)})", "limit": str(max(200, len(ids) * 4))})
+            for link in rows or []:
+                supplier_id = link.get("supplier_id")
+                category = link.get("supplier_categories") or {}
+                if not supplier_id or not category.get("id"):
+                    continue
+                result.setdefault(supplier_id, []).append({"id": category.get("id"), "name": category.get("name") or ""})
+        for rows in result.values():
+            rows.sort(key=lambda x: (x.get("name") or "").lower())
+        return result
+    links = await sb("GET", "/rest/v1/supplier_category_links", service=True, params=params)
     result: dict[str, list[dict[str, Any]]] = {}
     for link in links or []:
         supplier_id = link.get("supplier_id")
@@ -436,13 +451,103 @@ async def reset_supplier_values(data: SupplierResetValuesInput, profile: dict[st
 async def list_suppliers(q: str | None = None, branch_id: str | None = None, include_balance: bool = False, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     if not (effective_permissions(profile).get("view_suppliers") or effective_permissions(profile).get("view_payment_plans")):
         raise HTTPException(403, "ليس لديك صلاحية عرض الموردين")
+
+    safe = (q or "").strip().replace("%", "")[:80]
+
+    # Fast path for supplier page with balance by selected branch.
+    # Vercel can timeout when we fetch all suppliers/categories/all invoice balances first.
+    # Here we scope everything to the requested branch and, when external signed balances exist,
+    # we use them as the source of truth instead of recalculating thousands of invoice rows.
+    if include_balance and branch_id:
+        require_branch_access(profile, branch_id)
+        external_rows = await _external_balances(branch_id, profile)
+        use_external = bool(external_rows)
+
+        invoice_rows: list[dict[str, Any]] = []
+        if not use_external:
+            invoice_rows = await sb("GET", "/rest/v1/invoice_balances", service=True, params={
+                "select": "supplier_id,branch_id,balance,invoice_date",
+                "branch_id": f"eq.{branch_id}",
+                "limit": "10000",
+            }) or []
+
+        supplier_ids: set[str] = set()
+        for row in external_rows or []:
+            if row.get("supplier_id"):
+                supplier_ids.add(row["supplier_id"])
+        for row in invoice_rows or []:
+            if row.get("supplier_id"):
+                supplier_ids.add(row["supplier_id"])
+
+        if not supplier_ids:
+            return []
+
+        suppliers: list[dict[str, Any]] = []
+        base_select = "id,name,phone,notes,active,created_at"
+        for ids in _chunks(sorted(supplier_ids), 120):
+            params = {"select": base_select, "active": "eq.true", "id": f"in.({','.join(ids)})", "order": "name.asc", "limit": str(max(200, len(ids)))}
+            if safe:
+                params["name"] = f"ilike.*{safe}*"
+            suppliers.extend(await sb("GET", "/rest/v1/suppliers", service=True, params=params) or [])
+
+        supplier_ids_loaded = [row.get("id") for row in suppliers if row.get("id")]
+        categories_by_supplier = await _category_map(supplier_ids_loaded)
+
+        branch_rows = await sb("GET", "/rest/v1/branches", service=True, params={"select": "id,name", "id": f"eq.{branch_id}", "limit": "1"})
+        branch_name = (branch_rows[0] or {}).get("name") if branch_rows else "فرع غير معروف"
+
+        external_by_supplier: dict[str, dict[str, Any]] = {row.get("supplier_id"): row for row in external_rows if row.get("supplier_id")}
+        balances: dict[str, float] = {}
+        oldest_open_invoice: dict[str, date] = {}
+        today = date.today()
+        for inv in invoice_rows or []:
+            sid = inv.get("supplier_id")
+            if not sid:
+                continue
+            balance = float(inv.get("balance") or 0)
+            balances[sid] = balances.get(sid, 0.0) + balance
+            if balance <= 0 or not inv.get("invoice_date"):
+                continue
+            try:
+                invoice_date = date.fromisoformat(str(inv.get("invoice_date")))
+            except ValueError:
+                continue
+            previous = oldest_open_invoice.get(sid)
+            if previous is None or invoice_date < previous:
+                oldest_open_invoice[sid] = invoice_date
+
+        rows = []
+        for supplier in suppliers:
+            sid = supplier.get("id")
+            external = external_by_supplier.get(sid) or {}
+            signed_balance = round(float(external.get("signed_balance") if external else balances.get(sid, 0.0) or 0.0), 2)
+            oldest = oldest_open_invoice.get(sid)
+            if not oldest and external.get("last_invoice_date"):
+                try:
+                    oldest = date.fromisoformat(str(external.get("last_invoice_date")))
+                except ValueError:
+                    oldest = None
+            rows.append({
+                **supplier,
+                "categories": categories_by_supplier.get(sid, []),
+                "balance": signed_balance,
+                "debt_state": _debt_state(signed_balance),
+                "debt_label": "دين لنا" if signed_balance > 0 else ("دين علينا" if signed_balance < 0 else "بدون دين"),
+                "import_reference_no": external.get("reference_no"),
+                "branch_ids": [branch_id],
+                "branch_names": [branch_name],
+                "aging_days": max(0, (today - oldest).days) if oldest and signed_balance < 0 else None,
+                "oldest_open_invoice_date": oldest.isoformat() if oldest else None,
+            })
+        rows.sort(key=lambda x: (str(x.get("name") or "").lower()))
+        return rows
+
     params = {"select": "id,name,phone,notes,active,created_at", "active": "eq.true", "order": "name.asc", "limit": "5000"}
-    if q:
-        safe = q.strip().replace("%", "")[:80]
-        if safe:
-            params["name"] = f"ilike.*{safe}*"
+    if safe:
+        params["name"] = f"ilike.*{safe}*"
     suppliers = await sb("GET", "/rest/v1/suppliers", service=True, params=params)
-    categories_by_supplier = await _category_map()
+    supplier_ids_loaded = [row.get("id") for row in suppliers or [] if row.get("id")]
+    categories_by_supplier = await _category_map(supplier_ids_loaded if len(supplier_ids_loaded) <= 1000 else None)
 
     if not include_balance and not branch_id:
         return [{**supplier, "categories": categories_by_supplier.get(supplier.get("id"), [])} for supplier in (suppliers or [])]
@@ -515,7 +620,6 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
             ),
         })
     return rows
-
 
 @router.post("")
 async def create_supplier(data: SupplierInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:
