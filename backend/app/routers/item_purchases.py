@@ -531,17 +531,34 @@ async def purchase_summary(
             "equivalent_boxes": 0.0,
             "purchase_value": 0.0,
             "line_count": 0,
+            "purchase_count": 0,
+            "last_purchase_date": None,
+            "last_purchase_equivalent_boxes": 0.0,
+            "last_purchase_value": 0.0,
             "matched_by": row.get("matched_by") or "unmatched",
         })
+        eq = float(row.get("equivalent_boxes") or 0)
+        val = float(row.get("purchase_value") or 0)
         bucket["boxes_purchased"] += float(row.get("boxes_purchased") or 0)
         bucket["loose_purchased"] += float(row.get("loose_purchased") or 0)
-        bucket["equivalent_boxes"] += float(row.get("equivalent_boxes") or 0)
-        bucket["purchase_value"] += float(row.get("purchase_value") or 0)
+        bucket["equivalent_boxes"] += eq
+        bucket["purchase_value"] += val
         bucket["line_count"] += 1
+        if eq != 0 or val != 0:
+            bucket["purchase_count"] += 1
+        pdate = _purchase_line_date(row.get("purchase_date"))
+        current_last = _purchase_line_date(bucket.get("last_purchase_date"))
+        if pdate and (not current_last or pdate >= current_last):
+            bucket["last_purchase_date"] = pdate.isoformat()
+            bucket["last_purchase_equivalent_boxes"] = round(eq, 6)
+            bucket["last_purchase_value"] = round(val, 6)
     result = []
     for bucket in grouped.values():
-        for k in ("boxes_purchased", "loose_purchased", "equivalent_boxes", "purchase_value"):
+        for k in ("boxes_purchased", "loose_purchased", "equivalent_boxes", "purchase_value", "last_purchase_equivalent_boxes", "last_purchase_value"):
             bucket[k] = round(float(bucket[k]), 6)
+        count = max(1, int(bucket.get("purchase_count") or bucket.get("line_count") or 1))
+        bucket["average_purchase_equivalent_boxes"] = round(float(bucket["equivalent_boxes"]) / count, 6)
+        bucket["average_purchase_value"] = round(float(bucket["purchase_value"]) / count, 6)
         result.append(bucket)
     result.sort(key=lambda x: float(x.get("equivalent_boxes") or 0), reverse=True)
     return {

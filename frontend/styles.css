@@ -205,3 +205,13 @@
 .purchase-archive-panel span,.purchase-archive-panel small{color:#61736f}
 .text-danger{color:#c62828!important}
 @media(max-width:760px){.purchase-archive-panel{align-items:stretch;flex-direction:column}.purchase-archive-panel .actions{display:flex;gap:8px;flex-wrap:wrap}}
+
+/* V74 - stronger movement purchase analysis + ABC */
+.abc-badge{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:900;border:1px solid #d8e5e1;background:#f6faf9;color:#31534d;white-space:nowrap}
+.abc-badge.abc-A{background:#e9f7ef;border-color:#bde5ca;color:#0f6b3f}
+.abc-badge.abc-B{background:#fff8e8;border-color:#f1dca6;color:#8a6200}
+.abc-badge.abc-C{background:#f3f5f5;border-color:#d9e0de;color:#5d6865}
+.movement-decision{display:inline-flex;border:1px solid #dbe8e4;background:#f8fbfa;border-radius:10px;padding:4px 7px;font-size:11px;font-weight:800;color:#173b36;max-width:170px;white-space:normal;line-height:1.35}
+.movement-table td small{display:block;margin-top:3px;color:var(--muted);font-size:10px;line-height:1.35}
+.movement-table th{white-space:nowrap}
+@media(max-width:760px){.abc-badge{font-size:10px;padding:3px 7px}.movement-decision{max-width:100%;font-size:10px}}

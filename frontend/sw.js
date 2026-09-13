@@ -1,4 +1,4 @@
-const VERSION = 'abdo-debts-v73';
+const VERSION = 'abdo-debts-v74';
 const STATIC_CACHE = `${VERSION}-static`;
 const APP_SHELL = [
   '/',
