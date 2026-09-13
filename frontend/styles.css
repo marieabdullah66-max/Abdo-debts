@@ -215,3 +215,12 @@
 .movement-table td small{display:block;margin-top:3px;color:var(--muted);font-size:10px;line-height:1.35}
 .movement-table th{white-space:nowrap}
 @media(max-width:760px){.abc-badge{font-size:10px;padding:3px 7px}.movement-decision{max-width:100%;font-size:10px}}
+
+/* V75 - prominent ABC quick filter in item movement analysis */
+.movement-abc-quick{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-radius:14px;padding:9px 10px;margin:0 0 10px;box-shadow:0 8px 20px rgba(15,98,89,.05)}
+.movement-abc-quick>span{font-size:12px;font-weight:900;color:var(--green);margin-inline-end:2px}
+.abc-filter-btn{border:1px solid #d7e6e2;background:#f8fbfa;color:#23443e;border-radius:999px;padding:6px 12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;font:inherit;font-size:12px;font-weight:800;min-width:64px;justify-content:center}
+.abc-filter-btn small{font-size:10px;color:var(--muted);font-weight:700}
+.abc-filter-btn.active{background:#0f6259;border-color:#0f6259;color:#fff;box-shadow:0 7px 15px rgba(15,98,89,.18)}
+.abc-filter-btn.active small{color:#e9fffa}
+@media(max-width:500px){.movement-abc-quick{position:sticky;top:76px;z-index:8}.abc-filter-btn{flex:1 1 42%;padding:7px 9px}.movement-abc-quick>span{width:100%}}
