@@ -1345,6 +1345,41 @@ function taskModal(t=null){
 
 async function loadNoteBooks(){state.noteBooks=await api('/api/tasks/note-books');}
 async function loadDailyNotes(bookId){state.dailyNotes=bookId?await api(`/api/tasks/note-books/${bookId}/notes`):[];}
+async function exportDailyNotesPdf(){
+  try{
+    const books=[...(state.noteBooks||[])];
+    if(!books.length){toast('لا توجد عناوين أو ملاحظات لتصديرها.',true);return;}
+    const grouped=await Promise.all(books.map(async book=>{
+      const notes=await api(`/api/tasks/note-books/${book.id}/notes`);
+      return {book,notes:Array.isArray(notes)?notes:[]};
+    }));
+    const popup=window.open('','_blank');
+    if(!popup){toast('المتصفح منع نافذة التصدير. اسمح بالنوافذ المنبثقة وحاول من جديد.',true);return;}
+    const priorityLabel={urgent:'عاجلة',important:'مهمة',normal:'عادية'};
+    const sections=grouped.map(({book,notes},idx)=>{
+      const sorted=[...notes].sort((a,b)=>String(b.note_date||b.created_at||'').localeCompare(String(a.note_date||a.created_at||'')));
+      const notesHtml=sorted.length?sorted.map((n,i)=>`<div class="note-row"><div class="note-meta"><span class="num">${i+1}</span><strong>${esc(n.note_date||'بدون تاريخ')}</strong><span class="priority ${esc(n.priority||'normal')}">${esc(priorityLabel[n.priority]||'عادية')}</span><span class="follow ${n.followed_up?'done':'pending'}">${n.followed_up?'تمت المتابعة':'تحتاج متابعة'}</span></div><div class="note-text">${esc(n.note_text||'').replace(/\n/g,'<br>')}</div></div>`).join(''):'<div class="empty-note">لا توجد ملاحظات تحت هذا العنوان.</div>';
+      return `<section class="book ${idx?'book-break':''}"><div class="book-head"><div><span class="book-label">موظف / عنوان</span><h2>${esc(book.title||'بدون عنوان')}</h2></div><div class="count">${sorted.length.toLocaleString('en-US')} ملاحظة</div></div>${notesHtml}</section>`;
+    }).join('');
+    const totalNotes=grouped.reduce((sum,x)=>sum+x.notes.length,0);
+    const generated=typeof doctorPdfGeneratedAt==='function'?doctorPdfGeneratedAt():new Date().toLocaleString('ar-LY');
+    popup.document.open();
+    popup.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير الملاحظات اليومية</title><style>
+      @page{size:A4 portrait;margin:11mm}*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+      body{font-family:Tahoma,Arial,sans-serif;color:#173b36;margin:0;background:#fff;direction:rtl}
+      .report-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;border-bottom:3px solid #0f6259;padding-bottom:9px;margin-bottom:13px}
+      .report-head h1{margin:0 0 4px;color:#0f6259;font-size:21px}.meta{font-size:9.5px;color:#647873;line-height:1.8}.summary{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px}.summary span{border:1px solid #d8e5e1;background:#f6faf9;border-radius:999px;padding:5px 9px;font-size:9px}.summary b{color:#0f6259}
+      .book{margin:0 0 14px;break-inside:auto}.book-break{break-before:auto}.book-head{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;background:#eaf5f1;border:1px solid #cfe2dc;border-right:5px solid #0f6259;border-radius:9px;padding:8px 10px;margin-bottom:7px;break-after:avoid}.book-label{display:block;font-size:8px;color:#6f837d}.book-head h2{margin:1px 0 0;color:#0f6259;font-size:15px}.count{white-space:nowrap;font-size:9px;font-weight:700;color:#46615a}
+      .note-row{border:1px solid #dce7e3;border-radius:8px;padding:8px 9px;margin-bottom:6px;break-inside:avoid;background:#fff}.note-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px;font-size:8.5px;color:#62756f}.note-meta .num{width:19px;height:19px;border-radius:50%;display:inline-grid;place-items:center;background:#eef6f3;color:#0f6259;font-weight:700}.note-meta strong{font-size:9px;color:#27483f}.priority,.follow{padding:3px 7px;border-radius:999px;border:1px solid #dce7e3}.priority.urgent{background:#fff0f0;color:#a93434;border-color:#f0cece}.priority.important{background:#fff8e8;color:#8b650f;border-color:#eddcae}.priority.normal{background:#eff7f4;color:#23624f}.follow.done{background:#eef8f2;color:#26734f}.follow.pending{background:#fff7e8;color:#8b650f}
+      .note-text{font-size:10.5px;line-height:1.9;color:#263f39;white-space:normal}.empty-note{border:1px dashed #cfdcd8;border-radius:8px;padding:10px;text-align:center;color:#7a8c87;font-size:9px;margin-bottom:8px}
+      .foot{display:flex;justify-content:space-between;gap:12px;border-top:1px solid #dfe7e4;margin-top:12px;padding-top:6px;color:#758681;font-size:8px}.no-print{text-align:center;margin:12px 0}.no-print button{padding:8px 18px;border:0;border-radius:8px;background:#0f6259;color:#fff;font:inherit;font-weight:700}
+      @media print{.no-print{display:none}.book-head,.note-row{box-shadow:none}}
+    </style></head><body><header class="report-head"><div><h1>تقرير الملاحظات اليومية</h1><div class="meta">كل موظف أو عنوان وتحته الملاحظات المسجلة الخاصة به</div><div class="summary"><span>عدد العناوين: <b>${books.length.toLocaleString('en-US')}</b></span><span>إجمالي الملاحظات: <b>${totalNotes.toLocaleString('en-US')}</b></span></div></div><div class="meta">Abdo Debts<br>تاريخ التصدير: ${esc(generated)}</div></header>${sections}<div class="foot"><span>الملاحظات مرتبة من الأحدث إلى الأقدم داخل كل عنوان.</span><span>Abdo Debts</span></div><div class="no-print"><button onclick="print()">حفظ كـ PDF / طباعة</button></div></body></html>`);
+    popup.document.close();
+    toast('تم تجهيز تقرير الملاحظات PDF.');
+    setTimeout(()=>{try{popup.focus();popup.print();}catch{}},450);
+  }catch(e){toast(e.message||'تعذر تصدير الملاحظات',true);}
+}
 function noteBooksFiltered(){const q=String(state.notesSearch||'').trim().toLowerCase();let rows=[...(state.noteBooks||[])];if(q)rows=rows.filter(b=>String(b.title||'').toLowerCase().includes(q));return rows;}
 function currentNoteBook(){return (state.noteBooks||[]).find(b=>b.id===state.selectedNoteBookId)||null;}
 function noteStats(){const rows=state.dailyNotes||[];return {total:rows.length,today:rows.filter(n=>taskDate(n.note_date)===isoToday()).length,urgent:rows.filter(n=>n.priority==='urgent').length,pending:rows.filter(n=>!n.followed_up).length};}
@@ -1355,7 +1390,7 @@ async function renderNotesSection(){
   if(state.selectedNoteBookId && !state.noteBooks.some(b=>b.id===state.selectedNoteBookId))state.selectedNoteBookId='';
   if(state.selectedNoteBookId)await loadDailyNotes(state.selectedNoteBookId);else state.dailyNotes=[];
   const selected=currentNoteBook();
-  box.innerHTML=`<section class="panel notes-panel"><div class="notes-head"><div><h3>${selected?esc(selected.title):'الملاحظات اليومية'}</h3><p>${selected?'سجل ملاحظاتك اليومية داخل هذا العنوان.':'أضف موظف أو عنوان، وبعدها ادخل عليه وسجل الملاحظات.'}</p></div><div class="notes-actions">${selected?`<button class="btn btn-soft" id="backToNoteBooks">العناوين</button><button class="btn btn-primary" id="addDailyNote">+ ملاحظة</button>`:`<button class="btn btn-primary" id="addNoteBook">+ موظف / عنوان</button>`}</div></div>${selected?noteBookDetailHtml(selected):noteBooksListHtml()}</section>`;
+  box.innerHTML=`<section class="panel notes-panel"><div class="notes-head"><div><h3>${selected?esc(selected.title):'الملاحظات اليومية'}</h3><p>${selected?'سجل ملاحظاتك اليومية داخل هذا العنوان.':'أضف موظف أو عنوان، وبعدها ادخل عليه وسجل الملاحظات.'}</p></div><div class="notes-actions">${selected?`<button class="btn btn-soft" id="backToNoteBooks">العناوين</button><button class="btn btn-primary" id="addDailyNote">+ ملاحظة</button>`:`<button class="btn btn-soft" id="exportDailyNotesPdf">تصدير PDF</button><button class="btn btn-primary" id="addNoteBook">+ موظف / عنوان</button>`}</div></div>${selected?noteBookDetailHtml(selected):noteBooksListHtml()}</section>`;
   if(selected){
     document.getElementById('backToNoteBooks').onclick=async()=>{state.selectedNoteBookId='';await renderNotesSection();};
     document.getElementById('addDailyNote').onclick=()=>dailyNoteModal(selected.id);
@@ -1363,6 +1398,7 @@ async function renderNotesSection(){
   }else{
     document.getElementById('addNoteBook').onclick=()=>noteBookModal();
     const search=document.getElementById('noteBookSearch');if(search)search.oninput=e=>{state.notesSearch=e.target.value;renderNoteBookCardsOnly();};
+    const exportBtn=document.getElementById('exportDailyNotesPdf');if(exportBtn)exportBtn.onclick=exportDailyNotesPdf;
     bindNoteBookActions();
   }
 }
