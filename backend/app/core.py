@@ -38,7 +38,7 @@ PERMISSION_KEYS = {
     "view_item_analysis", "manage_item_catalog",
     "view_doctor_sales",
     "view_payment_plans", "manage_payment_plans",
-    "use_tasks",
+    "use_tasks", "use_daily_notes",
 }
 
 ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
@@ -60,6 +60,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
         "view_payment_plans": True,
         "manage_payment_plans": True,
         "use_tasks": True,
+        "use_daily_notes": True,
     },
     "viewer": {
         "view_dashboard": True,
@@ -379,6 +380,17 @@ class TaskInput(BaseModel):
 
 class TaskPostponeInput(BaseModel):
     due_date: date
+
+
+class DailyNoteBookInput(BaseModel):
+    title: str = Field(min_length=2, max_length=160)
+
+
+class DailyNoteInput(BaseModel):
+    note_text: str = Field(min_length=2, max_length=2500)
+    note_date: date | None = None
+    priority: Literal["urgent", "important", "normal"] = "normal"
+    followed_up: bool = False
 
 class UserCreateInput(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)

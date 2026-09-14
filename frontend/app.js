@@ -8,7 +8,7 @@ const state = {
   profile: null,
   branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], paymentPlans: [], users: [], categories: [], items: [], notifications: [],
   notificationUnread: 0, notificationTimer: null, authRefreshTimer: null,
-  tasks: [], taskFilter: 'today', taskSearch: '',
+  tasks: [], taskFilter: 'today', taskSearch: '', tasksSection: 'tasks', noteBooks: [], dailyNotes: [], selectedNoteBookId: '', notesSearch: '',
   supplierBranchId: '',
   supplierCategoryId: '',
   supplierSort: 'balance_desc',
@@ -51,12 +51,13 @@ const PERMISSION_LABELS = {
   view_item_analysis:'عرض حركة الأصناف', manage_item_catalog:'إدارة دليل الأصناف',
   view_doctor_sales:'عرض مبيعات الدكاترة',
   view_payment_plans:'عرض خطة السداد', manage_payment_plans:'إدارة خطة السداد',
-  use_tasks:'استخدام مهامي'
+  use_tasks:'استخدام مهامي',
+  use_daily_notes:'استخدام ملاحظات الموظفين'
 };
 const ROLE_LABELS = {admin:'مدير', finance:'مالي', viewer:'مشاهدة فقط'};
 const ROLE_DEFAULTS = {
   admin: Object.fromEntries(Object.keys(PERMISSION_LABELS).map(k=>[k,true])),
-  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true,view_doctor_sales:true,view_payment_plans:true,manage_payment_plans:true,use_tasks:true},
+  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true,view_doctor_sales:true,view_payment_plans:true,manage_payment_plans:true,use_tasks:true,use_daily_notes:true},
   viewer: {view_dashboard:true,view_suppliers:true,view_invoices:true,view_payments:true,view_reports:true,view_item_analysis:true,view_doctor_sales:true,view_payment_plans:true}
 };
 const STATUS_LABELS = {unpaid:'غير مسددة', partial:'جزئي', paid:'مسددة'};
@@ -1304,11 +1305,25 @@ function taskFilteredRows(){
 }
 function taskStats(){const today=isoToday(),rows=state.tasks||[];return {today:rows.filter(t=>t.status!=='completed'&&taskDate(t.due_date)===today).length,overdue:rows.filter(t=>t.status!=='completed'&&taskDate(t.due_date)&&taskDate(t.due_date)<today).length,urgent:rows.filter(t=>t.status!=='completed'&&t.priority==='urgent').length,open:rows.filter(t=>t.status!=='completed').length};}
 async function tasksView(main){
+  if(!can('use_daily_notes') && state.tasksSection==='notes')state.tasksSection='tasks';
   await loadTasks();
   const stats=taskStats();
-  main.innerHTML=`<div class="tasks-shell"><div class="tasks-hero"><div><span class="tasks-kicker">Abdo Tasks</span><h2>مهامي</h2><p>قائمة خاصة بحسابك فقط — مناسبة للهاتف Android و iOS وتفتح مباشرة من الاختصار.</p></div><div class="tasks-hero-actions"><button class="btn btn-light task-install-btn" id="taskInstallBtn" type="button">تثبيت مهامي</button><button class="btn btn-primary task-add-main" id="addTask">+ مهمة</button></div></div><section class="task-install-card"><div><strong>خلي مهامي على الشاشة الرئيسية</strong><span id="taskInstallHint">${esc(installHelpText())}</span></div><button class="btn btn-soft btn-sm" id="taskInstallBtnSmall" type="button">تثبيت / شرح</button></section><div class="task-stats"><div><span>اليوم</span><strong>${stats.today}</strong></div><div><span>متأخرة</span><strong>${stats.overdue}</strong></div><div><span>عاجلة</span><strong>${stats.urgent}</strong></div><div><span>مفتوحة</span><strong>${stats.open}</strong></div></div><section class="panel task-panel"><div class="task-filter-pills"><button class="task-filter ${state.taskFilter==='today'?'active':''}" data-task-filter="today">اليوم</button><button class="task-filter ${state.taskFilter==='overdue'?'active':''}" data-task-filter="overdue">متأخرة</button><button class="task-filter ${state.taskFilter==='week'?'active':''}" data-task-filter="week">هذا الأسبوع</button><button class="task-filter ${state.taskFilter==='open'?'active':''}" data-task-filter="open">المفتوحة</button><button class="task-filter ${state.taskFilter==='completed'?'active':''}" data-task-filter="completed">مكتملة</button><button class="task-filter ${state.taskFilter==='all'?'active':''}" data-task-filter="all">الكل</button></div><input class="input task-search" id="taskSearch" value="${esc(state.taskSearch)}" placeholder="بحث في مهامي..."><div id="taskRows"></div></section><button class="task-floating-add" id="taskFloatingAdd" aria-label="إضافة مهمة">+</button></div>`;
-  document.getElementById('addTask').onclick=()=>taskModal();document.getElementById('taskFloatingAdd').onclick=()=>taskModal();document.getElementById('taskInstallBtn').onclick=installTasksShortcut;document.getElementById('taskInstallBtnSmall').onclick=installTasksShortcut;updateTaskInstallHint();
-  main.querySelectorAll('[data-task-filter]').forEach(b=>b.onclick=()=>{state.taskFilter=b.dataset.taskFilter;renderTaskRows();main.querySelectorAll('[data-task-filter]').forEach(x=>x.classList.toggle('active',x.dataset.taskFilter===state.taskFilter));});
+  const installCard=isStandalonePwa()?'':`<section class="task-install-card"><div><strong>خلي مهامي على الشاشة الرئيسية</strong><span id="taskInstallHint">${esc(installHelpText())}</span></div><button class="btn btn-soft btn-sm" id="taskInstallBtnSmall" type="button">تثبيت / شرح</button></section>`;
+  main.innerHTML=`<div class="tasks-shell"><div class="tasks-hero"><div><span class="tasks-kicker">Abdo Tasks</span><h2>مهامي</h2><p>مهامك وملاحظاتك الخاصة بحسابك فقط — تصميم مناسب للهاتف Android و iOS.</p></div><div class="tasks-hero-actions">${isStandalonePwa()?'':`<button class="btn btn-light task-install-btn" id="taskInstallBtn" type="button">تثبيت مهامي</button>`}<button class="btn btn-primary task-add-main" id="addTaskTop">+ مهمة</button></div></div>${installCard}<div class="task-main-tabs"><button class="task-main-tab ${state.tasksSection==='tasks'?'active':''}" data-task-section="tasks">✅ المهام</button>${can('use_daily_notes')?`<button class="task-main-tab ${state.tasksSection==='notes'?'active':''}" data-task-section="notes">📝 الملاحظات اليومية</button>`:''}</div><div id="taskMainSection"></div></div>`;
+  const topAdd=document.getElementById('addTaskTop');if(topAdd)topAdd.onclick=()=>{state.tasksSection='tasks';renderTasksSection();taskModal();};
+  const installBtn=document.getElementById('taskInstallBtn');if(installBtn)installBtn.onclick=installTasksShortcut;
+  const installBtnSmall=document.getElementById('taskInstallBtnSmall');if(installBtnSmall)installBtnSmall.onclick=installTasksShortcut;
+  updateTaskInstallHint();
+  main.querySelectorAll('[data-task-section]').forEach(b=>b.onclick=async()=>{state.tasksSection=b.dataset.taskSection;main.querySelectorAll('[data-task-section]').forEach(x=>x.classList.toggle('active',x.dataset.taskSection===state.tasksSection));if(state.tasksSection==='notes')await renderNotesSection();else renderTasksSection();});
+  if(state.tasksSection==='notes')await renderNotesSection();else renderTasksSection();
+}
+
+function renderTasksSection(){
+  const box=document.getElementById('taskMainSection');if(!box)return;
+  const stats=taskStats();
+  box.innerHTML=`<div class="task-stats"><div><span>اليوم</span><strong>${stats.today}</strong></div><div><span>متأخرة</span><strong>${stats.overdue}</strong></div><div><span>عاجلة</span><strong>${stats.urgent}</strong></div><div><span>مفتوحة</span><strong>${stats.open}</strong></div></div><section class="panel task-panel"><div class="task-filter-pills"><button class="task-filter ${state.taskFilter==='today'?'active':''}" data-task-filter="today">اليوم</button><button class="task-filter ${state.taskFilter==='overdue'?'active':''}" data-task-filter="overdue">متأخرة</button><button class="task-filter ${state.taskFilter==='week'?'active':''}" data-task-filter="week">هذا الأسبوع</button><button class="task-filter ${state.taskFilter==='open'?'active':''}" data-task-filter="open">المفتوحة</button><button class="task-filter ${state.taskFilter==='completed'?'active':''}" data-task-filter="completed">مكتملة</button><button class="task-filter ${state.taskFilter==='all'?'active':''}" data-task-filter="all">الكل</button></div><input class="input task-search" id="taskSearch" value="${esc(state.taskSearch)}" placeholder="بحث في مهامي..."><div id="taskRows"></div></section><button class="task-floating-add" id="taskFloatingAdd" aria-label="إضافة مهمة">+</button>`;
+  document.getElementById('taskFloatingAdd').onclick=()=>taskModal();
+  box.querySelectorAll('[data-task-filter]').forEach(b=>b.onclick=()=>{state.taskFilter=b.dataset.taskFilter;renderTaskRows();box.querySelectorAll('[data-task-filter]').forEach(x=>x.classList.toggle('active',x.dataset.taskFilter===state.taskFilter));});
   document.getElementById('taskSearch').oninput=e=>{state.taskSearch=e.target.value;renderTaskRows();};
   renderTaskRows();
 }
@@ -1326,6 +1341,61 @@ async function taskSave(t){const payload={title:t.title,description:t.descriptio
 function taskModal(t=null){
   showModal(`${t?'تعديل':'إضافة'} مهمة`,`<form id="taskForm" class="form-grid task-form"><div class="field full"><label>عنوان المهمة *</label><input class="input" name="title" required minlength="2" maxlength="180" value="${esc(t?.title||'')}" placeholder="مثال: مراجعة خطة سداد المورد"></div><div class="field full"><label>ملاحظة</label><textarea class="input" name="description" maxlength="1500" rows="3" placeholder="تفاصيل مختصرة...">${esc(t?.description||'')}</textarea></div><div class="field"><label>الأولوية</label><select class="select" name="priority"><option value="urgent">عاجلة</option><option value="important">مهمة</option><option value="normal">عادية</option></select></div><div class="field"><label>الحالة</label><select class="select" name="status"><option value="new">جديدة</option><option value="in_progress">قيد التنفيذ</option><option value="postponed">مؤجلة</option><option value="completed">مكتملة</option></select></div><div class="field"><label>تاريخ الاستحقاق</label><input class="input" type="date" name="due_date" value="${esc(t?.due_date||isoToday())}"></div><div class="field"><label>الفرع</label><select class="select" name="branch_id"><option value="">عام / بدون فرع</option>${branchOptions(false,false)}</select></div></form>`,async()=>{const f=document.getElementById('taskForm');if(!f.reportValidity())return false;const fd=new FormData(f);await taskSave({id:t?.id,title:String(fd.get('title')||'').trim(),description:String(fd.get('description')||'').trim(),priority:fd.get('priority'),status:fd.get('status'),due_date:fd.get('due_date')||null,branch_id:fd.get('branch_id')||null});toast('تم حفظ المهمة');return true;},{saveText:'حفظ المهمة'});
   const f=document.getElementById('taskForm');if(f){f.elements.priority.value=t?.priority||'normal';f.elements.status.value=t?.status||'new';f.elements.branch_id.value=t?.branch_id||'';}
+}
+
+async function loadNoteBooks(){state.noteBooks=await api('/api/tasks/note-books');}
+async function loadDailyNotes(bookId){state.dailyNotes=bookId?await api(`/api/tasks/note-books/${bookId}/notes`):[];}
+function noteBooksFiltered(){const q=String(state.notesSearch||'').trim().toLowerCase();let rows=[...(state.noteBooks||[])];if(q)rows=rows.filter(b=>String(b.title||'').toLowerCase().includes(q));return rows;}
+function currentNoteBook(){return (state.noteBooks||[]).find(b=>b.id===state.selectedNoteBookId)||null;}
+function noteStats(){const rows=state.dailyNotes||[];return {total:rows.length,today:rows.filter(n=>taskDate(n.note_date)===isoToday()).length,urgent:rows.filter(n=>n.priority==='urgent').length,pending:rows.filter(n=>!n.followed_up).length};}
+async function renderNotesSection(){
+  const box=document.getElementById('taskMainSection');if(!box)return;
+  if(!can('use_daily_notes')){box.innerHTML='<div class="empty">ليس لديك صلاحية استخدام ملاحظات الموظفين.</div>';return;}
+  await loadNoteBooks();
+  if(state.selectedNoteBookId && !state.noteBooks.some(b=>b.id===state.selectedNoteBookId))state.selectedNoteBookId='';
+  if(state.selectedNoteBookId)await loadDailyNotes(state.selectedNoteBookId);else state.dailyNotes=[];
+  const selected=currentNoteBook();
+  box.innerHTML=`<section class="panel notes-panel"><div class="notes-head"><div><h3>${selected?esc(selected.title):'الملاحظات اليومية'}</h3><p>${selected?'سجل ملاحظاتك اليومية داخل هذا العنوان.':'أضف موظف أو عنوان، وبعدها ادخل عليه وسجل الملاحظات.'}</p></div><div class="notes-actions">${selected?`<button class="btn btn-soft" id="backToNoteBooks">العناوين</button><button class="btn btn-primary" id="addDailyNote">+ ملاحظة</button>`:`<button class="btn btn-primary" id="addNoteBook">+ موظف / عنوان</button>`}</div></div>${selected?noteBookDetailHtml(selected):noteBooksListHtml()}</section>`;
+  if(selected){
+    document.getElementById('backToNoteBooks').onclick=async()=>{state.selectedNoteBookId='';await renderNotesSection();};
+    document.getElementById('addDailyNote').onclick=()=>dailyNoteModal(selected.id);
+    bindDailyNoteActions();
+  }else{
+    document.getElementById('addNoteBook').onclick=()=>noteBookModal();
+    const search=document.getElementById('noteBookSearch');if(search)search.oninput=e=>{state.notesSearch=e.target.value;renderNoteBookCardsOnly();};
+    bindNoteBookActions();
+  }
+}
+function noteBooksListHtml(){
+  const rows=noteBooksFiltered();
+  return `<input class="input notes-search" id="noteBookSearch" value="${esc(state.notesSearch)}" placeholder="بحث في موظف أو عنوان..."><div id="noteBookCards">${noteBookCardsHtml(rows)}</div>`;
+}
+function noteBookCardsHtml(rows){
+  return rows.length?`<div class="note-book-grid">${rows.map(b=>`<article class="note-book-card" data-open-note-book="${esc(b.id)}"><div><h4>${esc(b.title)}</h4><span>آخر تحديث: ${esc(fmtDateTime(b.updated_at||b.created_at))}</span></div><div class="note-book-actions"><button class="btn btn-soft btn-sm" data-edit-note-book="${esc(b.id)}">تعديل</button><button class="btn btn-danger btn-sm" data-delete-note-book="${esc(b.id)}">حذف</button></div></article>`).join('')}</div>`:'<div class="empty">لا توجد عناوين بعد. أضف اسم موظف أو عنوان ملاحظات.</div>';
+}
+function renderNoteBookCardsOnly(){const box=document.getElementById('noteBookCards');if(box){box.innerHTML=noteBookCardsHtml(noteBooksFiltered());bindNoteBookActions();}}
+function noteBookDetailHtml(book){
+  const stats=noteStats();
+  const rows=[...(state.dailyNotes||[])];
+  return `<div class="note-stats"><div><span>الكل</span><strong>${stats.total}</strong></div><div><span>اليوم</span><strong>${stats.today}</strong></div><div><span>عاجلة</span><strong>${stats.urgent}</strong></div><div><span>لم تتم متابعتها</span><strong>${stats.pending}</strong></div></div><div id="dailyNoteRows">${rows.length?`<div class="daily-note-list">${rows.map(n=>dailyNoteCardHtml(n,book)).join('')}</div>`:'<div class="empty">لا توجد ملاحظات داخل هذا العنوان.</div>'}</div>`;
+}
+function dailyNoteCardHtml(n,book){return `<article class="daily-note-card ${n.followed_up?'done':''}"><div class="daily-note-top"><div><strong>${esc(book.title)}</strong><span>${esc(taskDate(n.note_date)||'بدون تاريخ')}</span></div><div class="task-badges">${taskPriorityBadge(n.priority)}${n.followed_up?'<span class="task-status task-status-completed">تمت المتابعة</span>':'<span class="task-status task-status-new">تحتاج متابعة</span>'}</div></div><p>${esc(n.note_text)}</p><div class="task-card-actions">${!n.followed_up?`<button class="btn btn-primary btn-sm" data-note-follow="${esc(n.id)}">تمت المتابعة</button>`:''}<button class="btn btn-ghost btn-sm" data-note-edit="${esc(n.id)}">تعديل</button><button class="btn btn-danger btn-sm" data-note-delete="${esc(n.id)}">حذف</button></div></article>`;}
+function bindNoteBookActions(){
+  document.querySelectorAll('[data-open-note-book]').forEach(card=>card.onclick=async(e)=>{if(e.target.closest('button'))return;state.selectedNoteBookId=card.dataset.openNoteBook;await renderNotesSection();});
+  document.querySelectorAll('[data-edit-note-book]').forEach(b=>b.onclick=()=>noteBookModal(state.noteBooks.find(x=>x.id===b.dataset.editNoteBook)));
+  document.querySelectorAll('[data-delete-note-book]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف العنوان وكل ملاحظاته؟'))return;try{await api(`/api/tasks/note-books/${b.dataset.deleteNoteBook}`,{method:'DELETE'});toast('تم حذف العنوان');state.selectedNoteBookId='';await renderNotesSection();}catch(e){toast(e.message,true);}});
+}
+function bindDailyNoteActions(){
+  document.querySelectorAll('[data-note-follow]').forEach(b=>b.onclick=async()=>{try{await api(`/api/tasks/notes/${b.dataset.noteFollow}/follow-up`,{method:'POST'});toast('تمت متابعة الملاحظة');await renderNotesSection();}catch(e){toast(e.message,true);}});
+  document.querySelectorAll('[data-note-edit]').forEach(b=>b.onclick=()=>dailyNoteModal(state.selectedNoteBookId,state.dailyNotes.find(x=>x.id===b.dataset.noteEdit)));
+  document.querySelectorAll('[data-note-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف الملاحظة؟'))return;try{await api(`/api/tasks/notes/${b.dataset.noteDelete}`,{method:'DELETE'});toast('تم حذف الملاحظة');await renderNotesSection();}catch(e){toast(e.message,true);}});
+}
+function noteBookModal(book=null){
+  showModal(`${book?'تعديل':'إضافة'} موظف / عنوان`,`<form id="noteBookForm" class="form-grid"><div class="field full"><label>اسم الموظف أو العنوان *</label><input class="input" name="title" required minlength="2" maxlength="160" value="${esc(book?.title||'')}" placeholder="مثال: أحمد / ملاحظات فرع المخزن"></div></form>`,async()=>{const f=document.getElementById('noteBookForm');if(!f.reportValidity())return false;const fd=new FormData(f);await api(book?`/api/tasks/note-books/${book.id}`:'/api/tasks/note-books',{method:book?'PUT':'POST',body:JSON.stringify({title:String(fd.get('title')||'').trim()})});toast('تم حفظ العنوان');await renderNotesSection();return true;},{saveText:'حفظ'});
+}
+function dailyNoteModal(bookId,n=null){
+  showModal(`${n?'تعديل':'إضافة'} ملاحظة`,`<form id="dailyNoteForm" class="form-grid task-form"><div class="field"><label>التاريخ</label><input class="input" type="date" name="note_date" value="${esc(n?.note_date||isoToday())}"></div><div class="field"><label>الأهمية</label><select class="select" name="priority"><option value="urgent">عاجلة</option><option value="important">مهمة</option><option value="normal">عادية</option></select></div><div class="field full"><label>الملاحظة *</label><textarea class="input" name="note_text" required minlength="2" maxlength="2500" rows="5" placeholder="اكتب الملاحظة اليومية هنا...">${esc(n?.note_text||'')}</textarea></div><label class="check-card full"><input type="checkbox" name="followed_up" ${n?.followed_up?'checked':''}> تمت المتابعة</label></form>`,async()=>{const f=document.getElementById('dailyNoteForm');if(!f.reportValidity())return false;const fd=new FormData(f);const payload={note_text:String(fd.get('note_text')||'').trim(),note_date:fd.get('note_date')||null,priority:fd.get('priority')||'normal',followed_up:!!f.elements.followed_up.checked};await api(n?`/api/tasks/notes/${n.id}`:`/api/tasks/note-books/${bookId}/notes`,{method:n?'PUT':'POST',body:JSON.stringify(payload)});toast('تم حفظ الملاحظة');await renderNotesSection();return true;},{saveText:'حفظ الملاحظة'});
+  const f=document.getElementById('dailyNoteForm');if(f)f.elements.priority.value=n?.priority||'normal';
 }
 
 async function itemsView(main){
