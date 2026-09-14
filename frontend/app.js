@@ -1,5 +1,6 @@
 const root = document.getElementById('root');
 const toastEl = document.getElementById('toast');
+let deferredInstallPrompt = null;
 
 const state = {
   accessToken: localStorage.getItem('debts_access') || '',
@@ -1250,6 +1251,39 @@ async function loadItemSalesRates(){
 }
 
 
+
+function isStandalonePwa(){
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+function isIosDevice(){return /iphone|ipad|ipod/i.test(navigator.userAgent||'');}
+function installHelpText(){
+  if(isStandalonePwa())return 'مهامي مثبتة ومفتوحة كتطبيق مستقل.';
+  if(isIosDevice())return 'على iPhone: افتح الصفحة من Safari، اضغط مشاركة، ثم إضافة إلى الشاشة الرئيسية. لو الخيار مش ظاهر، انزل لآخر قائمة المشاركة أو اضغط تحرير الإجراءات وأضفه.';
+  if(deferredInstallPrompt)return 'اضغط زر التثبيت باش تظهر نافذة إضافة مهامي للشاشة الرئيسية.';
+  return 'على Android: افتح الصفحة من Chrome، ثم الثلاث نقاط ⋮، اختار تثبيت التطبيق أو إضافة إلى الشاشة الرئيسية. لو ما ظهرش، انتظر تحميل الصفحة بالكامل وجرب تحديثها.';
+}
+async function installTasksShortcut(){
+  if(isStandalonePwa()){toast('مهامي مثبتة بالفعل');return;}
+  if(deferredInstallPrompt){
+    const promptEvent=deferredInstallPrompt;
+    deferredInstallPrompt=null;
+    promptEvent.prompt();
+    try{
+      const choice=await promptEvent.userChoice;
+      toast(choice?.outcome==='accepted'?'تم إرسال طلب التثبيت':'تم إلغاء التثبيت');
+    }catch(_){toast('افتح قائمة المتصفح لو لم تظهر نافذة التثبيت');}
+    updateTaskInstallHint();
+    return;
+  }
+  showModal('تثبيت مهامي على الشاشة الرئيسية',`<div class="install-help"><p>${esc(installHelpText())}</p><div class="install-steps"><strong>الرابط المباشر:</strong><code>${esc(location.origin+'/?view=tasks')}</code></div><div class="hint">مهم: افتح الرابط من Safari في iPhone أو Chrome في Android، مش من واتساب أو فيسبوك.</div></div>`,null,{saveText:null});
+}
+function updateTaskInstallHint(){
+  const hint=document.getElementById('taskInstallHint');
+  if(hint)hint.textContent=installHelpText();
+  const btn=document.getElementById('taskInstallBtn');
+  if(btn){btn.textContent=isStandalonePwa()?'مثبتة ✅':(deferredInstallPrompt?'تثبيت مهامي':'طريقة التثبيت');btn.disabled=isStandalonePwa();}
+}
+
 const TASK_PRIORITY_LABELS={urgent:'عاجلة',important:'مهمة',normal:'عادية'};
 const TASK_STATUS_LABELS={new:'جديدة',in_progress:'قيد التنفيذ',postponed:'مؤجلة',completed:'مكتملة'};
 function taskDate(v){return String(v||'').slice(0,10);}
@@ -1272,8 +1306,8 @@ function taskStats(){const today=isoToday(),rows=state.tasks||[];return {today:r
 async function tasksView(main){
   await loadTasks();
   const stats=taskStats();
-  main.innerHTML=`<div class="tasks-shell"><div class="tasks-hero"><div><span class="tasks-kicker">Abdo Tasks</span><h2>مهامي</h2><p>قائمة خاصة بحسابك فقط — مناسبة للهاتف Android و iOS وتفتح مباشرة من الاختصار.</p></div><button class="btn btn-primary task-add-main" id="addTask">+ مهمة</button></div><div class="task-stats"><div><span>اليوم</span><strong>${stats.today}</strong></div><div><span>متأخرة</span><strong>${stats.overdue}</strong></div><div><span>عاجلة</span><strong>${stats.urgent}</strong></div><div><span>مفتوحة</span><strong>${stats.open}</strong></div></div><section class="panel task-panel"><div class="task-filter-pills"><button class="task-filter ${state.taskFilter==='today'?'active':''}" data-task-filter="today">اليوم</button><button class="task-filter ${state.taskFilter==='overdue'?'active':''}" data-task-filter="overdue">متأخرة</button><button class="task-filter ${state.taskFilter==='week'?'active':''}" data-task-filter="week">هذا الأسبوع</button><button class="task-filter ${state.taskFilter==='open'?'active':''}" data-task-filter="open">المفتوحة</button><button class="task-filter ${state.taskFilter==='completed'?'active':''}" data-task-filter="completed">مكتملة</button><button class="task-filter ${state.taskFilter==='all'?'active':''}" data-task-filter="all">الكل</button></div><input class="input task-search" id="taskSearch" value="${esc(state.taskSearch)}" placeholder="بحث في مهامي..."><div id="taskRows"></div></section><button class="task-floating-add" id="taskFloatingAdd" aria-label="إضافة مهمة">+</button></div>`;
-  document.getElementById('addTask').onclick=()=>taskModal();document.getElementById('taskFloatingAdd').onclick=()=>taskModal();
+  main.innerHTML=`<div class="tasks-shell"><div class="tasks-hero"><div><span class="tasks-kicker">Abdo Tasks</span><h2>مهامي</h2><p>قائمة خاصة بحسابك فقط — مناسبة للهاتف Android و iOS وتفتح مباشرة من الاختصار.</p></div><div class="tasks-hero-actions"><button class="btn btn-light task-install-btn" id="taskInstallBtn" type="button">تثبيت مهامي</button><button class="btn btn-primary task-add-main" id="addTask">+ مهمة</button></div></div><section class="task-install-card"><div><strong>خلي مهامي على الشاشة الرئيسية</strong><span id="taskInstallHint">${esc(installHelpText())}</span></div><button class="btn btn-soft btn-sm" id="taskInstallBtnSmall" type="button">تثبيت / شرح</button></section><div class="task-stats"><div><span>اليوم</span><strong>${stats.today}</strong></div><div><span>متأخرة</span><strong>${stats.overdue}</strong></div><div><span>عاجلة</span><strong>${stats.urgent}</strong></div><div><span>مفتوحة</span><strong>${stats.open}</strong></div></div><section class="panel task-panel"><div class="task-filter-pills"><button class="task-filter ${state.taskFilter==='today'?'active':''}" data-task-filter="today">اليوم</button><button class="task-filter ${state.taskFilter==='overdue'?'active':''}" data-task-filter="overdue">متأخرة</button><button class="task-filter ${state.taskFilter==='week'?'active':''}" data-task-filter="week">هذا الأسبوع</button><button class="task-filter ${state.taskFilter==='open'?'active':''}" data-task-filter="open">المفتوحة</button><button class="task-filter ${state.taskFilter==='completed'?'active':''}" data-task-filter="completed">مكتملة</button><button class="task-filter ${state.taskFilter==='all'?'active':''}" data-task-filter="all">الكل</button></div><input class="input task-search" id="taskSearch" value="${esc(state.taskSearch)}" placeholder="بحث في مهامي..."><div id="taskRows"></div></section><button class="task-floating-add" id="taskFloatingAdd" aria-label="إضافة مهمة">+</button></div>`;
+  document.getElementById('addTask').onclick=()=>taskModal();document.getElementById('taskFloatingAdd').onclick=()=>taskModal();document.getElementById('taskInstallBtn').onclick=installTasksShortcut;document.getElementById('taskInstallBtnSmall').onclick=installTasksShortcut;updateTaskInstallHint();
   main.querySelectorAll('[data-task-filter]').forEach(b=>b.onclick=()=>{state.taskFilter=b.dataset.taskFilter;renderTaskRows();main.querySelectorAll('[data-task-filter]').forEach(x=>x.classList.toggle('active',x.dataset.taskFilter===state.taskFilter));});
   document.getElementById('taskSearch').oninput=e=>{state.taskSearch=e.target.value;renderTaskRows();};
   renderTaskRows();
@@ -2172,6 +2206,18 @@ function userModal(u=null){
 }
 
 function showModal(title,body,onSave=null,opts={}){const wrap=document.createElement('div');wrap.className='modal-backdrop';wrap.innerHTML=`<div class="modal ${opts.large?'modal-lg':''}"><div class="modal-head"><h3>${esc(title)}</h3><button class="btn btn-ghost btn-sm" data-close>✕</button></div><div class="modal-body">${body}</div><div class="modal-foot">${onSave&&opts.saveText!==null?`<button class="btn btn-primary" data-save>${esc(opts.saveText||'حفظ')}</button>`:''}<button class="btn btn-ghost" data-close>إغلاق</button></div></div>`;document.body.appendChild(wrap);const close=()=>wrap.remove();wrap.querySelectorAll('[data-close]').forEach(b=>b.onclick=close);wrap.onclick=e=>{if(e.target===wrap)close();};const save=wrap.querySelector('[data-save]');if(save)save.onclick=async()=>{save.disabled=true;try{const ok=await onSave();if(ok!==false)close();}catch(e){toast(e.message,true);}finally{if(document.body.contains(save))save.disabled=false;}};return wrap;}
+
+
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  updateTaskInstallHint();
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  toast('تم تثبيت مهامي على الشاشة الرئيسية');
+  updateTaskInstallHint();
+});
 
 window.addEventListener('resize',syncStickyOffsets);
 window.addEventListener('orientationchange',()=>setTimeout(syncStickyOffsets,100));
