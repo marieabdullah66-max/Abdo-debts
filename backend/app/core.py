@@ -38,6 +38,7 @@ PERMISSION_KEYS = {
     "view_item_analysis", "manage_item_catalog",
     "view_doctor_sales",
     "view_payment_plans", "manage_payment_plans",
+    "use_tasks",
 }
 
 ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
@@ -58,6 +59,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
         "view_doctor_sales": True,
         "view_payment_plans": True,
         "manage_payment_plans": True,
+        "use_tasks": True,
     },
     "viewer": {
         "view_dashboard": True,
@@ -363,6 +365,20 @@ class PaymentInput(BaseModel):
             raise ValueError("لا يمكن تكرار نفس الفاتورة في توزيع واحد")
         return self
 
+
+
+
+class TaskInput(BaseModel):
+    title: str = Field(min_length=2, max_length=180)
+    description: str | None = Field(default=None, max_length=1500)
+    priority: Literal["urgent", "important", "normal"] = "normal"
+    status: Literal["new", "in_progress", "postponed", "completed"] = "new"
+    due_date: date | None = None
+    branch_id: str | None = None
+
+
+class TaskPostponeInput(BaseModel):
+    due_date: date
 
 class UserCreateInput(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)

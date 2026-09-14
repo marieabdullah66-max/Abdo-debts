@@ -18,6 +18,7 @@
     {"src":"/assets/icons/maskable-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"}
   ],
   "shortcuts": [
+    {"name":"مهامي","short_name":"مهامي","url":"/?view=tasks"},
     {"name":"الفواتير","short_name":"الفواتير","url":"/?view=invoices"},
     {"name":"السدادات","short_name":"السدادات","url":"/?view=payments"}
   ]

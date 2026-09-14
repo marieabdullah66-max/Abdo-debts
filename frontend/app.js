@@ -7,6 +7,7 @@ const state = {
   profile: null,
   branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], paymentPlans: [], users: [], categories: [], items: [], notifications: [],
   notificationUnread: 0, notificationTimer: null, authRefreshTimer: null,
+  tasks: [], taskFilter: 'today', taskSearch: '',
   supplierBranchId: '',
   supplierCategoryId: '',
   supplierSort: 'balance_desc',
@@ -48,12 +49,13 @@ const PERMISSION_LABELS = {
   manage_branches:'إدارة الفروع', manage_users:'إدارة المستخدمين', view_reports:'عرض التقارير',
   view_item_analysis:'عرض حركة الأصناف', manage_item_catalog:'إدارة دليل الأصناف',
   view_doctor_sales:'عرض مبيعات الدكاترة',
-  view_payment_plans:'عرض خطة السداد', manage_payment_plans:'إدارة خطة السداد'
+  view_payment_plans:'عرض خطة السداد', manage_payment_plans:'إدارة خطة السداد',
+  use_tasks:'استخدام مهامي'
 };
 const ROLE_LABELS = {admin:'مدير', finance:'مالي', viewer:'مشاهدة فقط'};
 const ROLE_DEFAULTS = {
   admin: Object.fromEntries(Object.keys(PERMISSION_LABELS).map(k=>[k,true])),
-  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true,view_doctor_sales:true,view_payment_plans:true,manage_payment_plans:true},
+  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true,view_doctor_sales:true,view_payment_plans:true,manage_payment_plans:true,use_tasks:true},
   viewer: {view_dashboard:true,view_suppliers:true,view_invoices:true,view_payments:true,view_reports:true,view_item_analysis:true,view_doctor_sales:true,view_payment_plans:true}
 };
 const STATUS_LABELS = {unpaid:'غير مسددة', partial:'جزئي', paid:'مسددة'};
@@ -293,13 +295,13 @@ function syncStickyOffsets(){
 }
 function renderApp(){
   if(!state.profile)return renderLogin();
-  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',shortages:'view_item_analysis',reportbuilder:'view_reports',doctorsales:'view_doctor_sales',doctorcompare:'view_doctor_sales',doctorperiodcompare:'view_doctor_sales',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
+  const allowedViews={dashboard:'view_dashboard',items:'view_item_analysis',shortages:'view_item_analysis',reportbuilder:'view_reports',doctorsales:'view_doctor_sales',doctorcompare:'view_doctor_sales',doctorperiodcompare:'view_doctor_sales',tasks:'use_tasks',suppliers:'view_suppliers',supplier:'view_suppliers',invoices:'view_invoices',payments:'view_payments',paymentplan:'view_payment_plans',settings:null};
   if(allowedViews[state.view] && !can(allowedViews[state.view])) state.view=can('view_dashboard')?'dashboard':can('view_invoices')?'invoices':'settings';
   const settingsVisible=can('manage_branches')||can('manage_suppliers')||can('manage_users');
   root.innerHTML=`<div class="app">
     <header class="topbar"><div class="topbar-inner"><div class="top-title"><div>💰</div><div><strong>Abdo Debts</strong><small>نظام المديونيات</small></div></div><div class="user-box">${notificationAccess()?`<button class="notification-bell" id="notificationBell" aria-label="الإشعارات" title="الإشعارات">🔔<span id="notificationBadge" class="notification-badge ${state.notificationUnread>0?'':'hidden'}">${state.notificationUnread>99?'99+':state.notificationUnread}</span></button>`:''}<span class="user-name">${esc(state.profile.full_name)}</span><button class="btn btn-ghost btn-sm" id="logoutBtn">خروج</button></div></div></header>
     <main class="main" id="main"></main>
-    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('shortages','📦','النواقص المقترحة','view_item_analysis')}${navButton('reportbuilder','📊','تقرير شامل','view_reports')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('doctorcompare','⚖️','مقارنة الدكاترة','view_doctor_sales')}${navButton('doctorperiodcompare','🔄','مقارنة الفترات','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
+    <nav class="nav"><div class="nav-inner">${navButton('dashboard','▦','الرئيسية','view_dashboard')}${navButton('tasks','✅','مهامي','use_tasks')}${navButton('items','▤','حركة الأصناف','view_item_analysis')}${navButton('shortages','📦','النواقص المقترحة','view_item_analysis')}${navButton('reportbuilder','📊','تقرير شامل','view_reports')}${navButton('doctorsales','📊','مبيعات الدكاترة','view_doctor_sales')}${navButton('doctorcompare','⚖️','مقارنة الدكاترة','view_doctor_sales')}${navButton('doctorperiodcompare','🔄','مقارنة الفترات','view_doctor_sales')}${navButton('suppliers','🏢','الموردين','view_suppliers')}${navButton('invoices','🧾','الفواتير','view_invoices')}${navButton('payments','💳','السدادات','view_payments')}${navButton('paymentplan','📅','خطة السداد','view_payment_plans')}${settingsVisible?navButton('settings','⚙️','الإعدادات',null):''}</div></nav>
   </div>`;
   document.getElementById('logoutBtn').onclick=logout;const bell=document.getElementById('notificationBell');if(bell)bell.onclick=openNotifications;updateNotificationBell();
   root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>go(b.dataset.view));
@@ -311,6 +313,7 @@ function go(view){state.view=view;if(view!=='supplier')state.supplierId='';const
 function openSupplierPage(id){state.view='supplier';state.supplierId=id;const u=new URL(location.href);u.searchParams.set('view','supplier');u.searchParams.set('supplier_id',id);history.pushState({},'',u);renderApp();}
 async function renderView(){const main=document.getElementById('main');main.innerHTML='<div class="loading">جاري التحميل...</div>';try{
   if(state.view==='dashboard')await dashboardView(main);
+  else if(state.view==='tasks')await tasksView(main);
   else if(state.view==='items')await itemsView(main);
   else if(state.view==='shortages')await shortagesView(main);
   else if(state.view==='reportbuilder')await reportBuilderView(main);
@@ -1244,6 +1247,51 @@ async function loadItemSalesRates(){
     const info=document.getElementById('itemRateSourceInfo');if(info){const overlap=Number(state.itemSalesRateMeta?.overlap_report_count||0),skipped=Number(state.itemSalesRateMeta?.skipped_rows||0);info.innerHTML=`<strong>معدل البيع المعتمد</strong><span>${catalogRateSourceText()}</span><small>${overlap?`تم ضبط ${overlap} تقرير متداخل لمنع تكرار نفس الفترة. `:''}${skipped?`⚠️ ${skipped.toLocaleString('en-US')} سطر حركة غير مرتبط بالدليل ولم يدخل في المعدل. `:''}يتحدث تلقائيًا عند إضافة أو حذف تقرير حركة.</small>`;}
     renderItemRows();
   }catch(e){if(requestId!==state.itemSalesRateRequestSeq)return;state.itemSalesRates={};state.itemSalesRateMeta=null;const info=document.getElementById('itemRateSourceInfo');if(info)info.innerHTML=`<strong>معدل البيع المعتمد</strong><span>${esc(e.message)}</span>`;toast(e.message,true);}
+}
+
+
+const TASK_PRIORITY_LABELS={urgent:'عاجلة',important:'مهمة',normal:'عادية'};
+const TASK_STATUS_LABELS={new:'جديدة',in_progress:'قيد التنفيذ',postponed:'مؤجلة',completed:'مكتملة'};
+function taskDate(v){return String(v||'').slice(0,10);}
+function addDaysIso(days){const d=new Date();d.setDate(d.getDate()+Number(days||0));return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);}
+function taskBranchName(t){return t?.branches?.name||state.branches.find(b=>b.id===t.branch_id)?.name||'عام';}
+function taskPriorityBadge(p){const v=p||'normal';return `<span class="task-priority task-${esc(v)}">${esc(TASK_PRIORITY_LABELS[v]||v)}</span>`;}
+function taskStatusBadge(st){const v=st||'new';return `<span class="task-status task-status-${esc(v)}">${esc(TASK_STATUS_LABELS[v]||v)}</span>`;}
+function taskDueLabel(t){const d=taskDate(t?.due_date);if(!d)return '<span class="muted">بدون موعد</span>';const today=isoToday();if(t.status!=='completed'&&d<today)return `<span class="task-due overdue">متأخرة · ${esc(d)}</span>`;if(d===today)return `<span class="task-due today">اليوم</span>`;if(d===addDaysIso(1))return `<span class="task-due tomorrow">غدًا</span>`;return `<span class="task-due">${esc(d)}</span>`;}
+function taskInThisWeek(t){const d=taskDate(t?.due_date);if(!d)return false;const today=isoToday(),week=isoWeekValue(today);return dateInIsoWeek(d,week);}
+async function loadTasks(){state.tasks=await api('/api/tasks');}
+function taskFilteredRows(){
+  const q=String(state.taskSearch||'').trim().toLowerCase(),f=state.taskFilter||'today',today=isoToday();
+  let rows=[...(state.tasks||[])];
+  rows=rows.filter(t=>{const d=taskDate(t.due_date),done=t.status==='completed';if(f==='today')return !done&&d===today;if(f==='overdue')return !done&&d&&d<today;if(f==='week')return !done&&taskInThisWeek(t);if(f==='completed')return done;if(f==='open')return !done;return true;});
+  if(q)rows=rows.filter(t=>`${t.title||''} ${t.description||''} ${taskBranchName(t)}`.toLowerCase().includes(q));
+  const priority={urgent:0,important:1,normal:2},status={new:0,in_progress:1,postponed:2,completed:3};
+  return rows.sort((a,b)=>(status[a.status]??9)-(status[b.status]??9)||(priority[a.priority]??9)-(priority[b.priority]??9)||String(a.due_date||'9999').localeCompare(String(b.due_date||'9999'))||String(b.created_at||'').localeCompare(String(a.created_at||'')));
+}
+function taskStats(){const today=isoToday(),rows=state.tasks||[];return {today:rows.filter(t=>t.status!=='completed'&&taskDate(t.due_date)===today).length,overdue:rows.filter(t=>t.status!=='completed'&&taskDate(t.due_date)&&taskDate(t.due_date)<today).length,urgent:rows.filter(t=>t.status!=='completed'&&t.priority==='urgent').length,open:rows.filter(t=>t.status!=='completed').length};}
+async function tasksView(main){
+  await loadTasks();
+  const stats=taskStats();
+  main.innerHTML=`<div class="tasks-shell"><div class="tasks-hero"><div><span class="tasks-kicker">Abdo Tasks</span><h2>مهامي</h2><p>قائمة خاصة بحسابك فقط — مناسبة للهاتف Android و iOS وتفتح مباشرة من الاختصار.</p></div><button class="btn btn-primary task-add-main" id="addTask">+ مهمة</button></div><div class="task-stats"><div><span>اليوم</span><strong>${stats.today}</strong></div><div><span>متأخرة</span><strong>${stats.overdue}</strong></div><div><span>عاجلة</span><strong>${stats.urgent}</strong></div><div><span>مفتوحة</span><strong>${stats.open}</strong></div></div><section class="panel task-panel"><div class="task-filter-pills"><button class="task-filter ${state.taskFilter==='today'?'active':''}" data-task-filter="today">اليوم</button><button class="task-filter ${state.taskFilter==='overdue'?'active':''}" data-task-filter="overdue">متأخرة</button><button class="task-filter ${state.taskFilter==='week'?'active':''}" data-task-filter="week">هذا الأسبوع</button><button class="task-filter ${state.taskFilter==='open'?'active':''}" data-task-filter="open">المفتوحة</button><button class="task-filter ${state.taskFilter==='completed'?'active':''}" data-task-filter="completed">مكتملة</button><button class="task-filter ${state.taskFilter==='all'?'active':''}" data-task-filter="all">الكل</button></div><input class="input task-search" id="taskSearch" value="${esc(state.taskSearch)}" placeholder="بحث في مهامي..."><div id="taskRows"></div></section><button class="task-floating-add" id="taskFloatingAdd" aria-label="إضافة مهمة">+</button></div>`;
+  document.getElementById('addTask').onclick=()=>taskModal();document.getElementById('taskFloatingAdd').onclick=()=>taskModal();
+  main.querySelectorAll('[data-task-filter]').forEach(b=>b.onclick=()=>{state.taskFilter=b.dataset.taskFilter;renderTaskRows();main.querySelectorAll('[data-task-filter]').forEach(x=>x.classList.toggle('active',x.dataset.taskFilter===state.taskFilter));});
+  document.getElementById('taskSearch').oninput=e=>{state.taskSearch=e.target.value;renderTaskRows();};
+  renderTaskRows();
+}
+function renderTaskRows(){
+  const box=document.getElementById('taskRows');if(!box)return;const rows=taskFilteredRows();
+  box.innerHTML=rows.length?`<div class="task-card-list">${rows.map(t=>`<article class="task-card ${t.status==='completed'?'done':''}"><div class="task-card-top"><button class="task-check" data-task-complete="${esc(t.id)}" ${t.status==='completed'?'disabled':''}>${t.status==='completed'?'✓':'○'}</button><div class="task-title-wrap"><h3>${esc(t.title)}</h3><div class="task-badges">${taskPriorityBadge(t.priority)}${taskStatusBadge(t.status)}${taskDueLabel(t)}</div></div></div>${t.description?`<p class="task-desc">${esc(t.description)}</p>`:''}<div class="task-meta-line"><span>🏢 ${esc(taskBranchName(t))}</span>${t.created_at?`<span>أضيفت: ${esc(fmtDateTime(t.created_at))}</span>`:''}</div><div class="task-card-actions">${t.status!=='completed'?`<button class="btn btn-primary btn-sm" data-task-complete="${esc(t.id)}">تم</button><button class="btn btn-soft btn-sm" data-task-progress="${esc(t.id)}">قيد التنفيذ</button><button class="btn btn-soft btn-sm" data-task-postpone="${esc(t.id)}">تأجيل للغد</button>`:''}<button class="btn btn-ghost btn-sm" data-task-edit="${esc(t.id)}">تعديل</button><button class="btn btn-danger btn-sm" data-task-delete="${esc(t.id)}">حذف</button></div></article>`).join('')}</div>`:'<div class="empty">لا توجد مهام مطابقة. اضغط + وأضف أول مهمة.</div>';
+  box.querySelectorAll('[data-task-complete]').forEach(b=>b.onclick=async()=>{const id=b.dataset.taskComplete;if(!id)return;try{await api(`/api/tasks/${id}/complete`,{method:'POST'});toast('تم إكمال المهمة');await loadTasks();updateTaskStatsOnly();renderTaskRows();}catch(e){toast(e.message,true);}});
+  box.querySelectorAll('[data-task-postpone]').forEach(b=>b.onclick=async()=>{try{await api(`/api/tasks/${b.dataset.taskPostpone}/postpone`,{method:'POST',body:JSON.stringify({due_date:addDaysIso(1)})});toast('تم تأجيل المهمة للغد');await loadTasks();updateTaskStatsOnly();renderTaskRows();}catch(e){toast(e.message,true);}});
+  box.querySelectorAll('[data-task-progress]').forEach(b=>b.onclick=async()=>{const t=state.tasks.find(x=>x.id===b.dataset.taskProgress);if(!t)return;try{await taskSave({...t,status:'in_progress'});toast('تم نقل المهمة لقيد التنفيذ');}catch(e){toast(e.message,true);}});
+  box.querySelectorAll('[data-task-edit]').forEach(b=>b.onclick=()=>taskModal(state.tasks.find(x=>x.id===b.dataset.taskEdit)));
+  box.querySelectorAll('[data-task-delete]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف المهمة؟'))return;try{await api(`/api/tasks/${b.dataset.taskDelete}`,{method:'DELETE'});toast('تم حذف المهمة');await loadTasks();updateTaskStatsOnly();renderTaskRows();}catch(e){toast(e.message,true);}});
+}
+function updateTaskStatsOnly(){const stats=taskStats(),els=document.querySelectorAll('.task-stats strong');if(els.length>=4){els[0].textContent=stats.today;els[1].textContent=stats.overdue;els[2].textContent=stats.urgent;els[3].textContent=stats.open;}}
+async function taskSave(t){const payload={title:t.title,description:t.description||null,priority:t.priority||'normal',status:t.status||'new',due_date:t.due_date||null,branch_id:t.branch_id||null};await api(t.id?`/api/tasks/${t.id}`:'/api/tasks',{method:t.id?'PUT':'POST',body:JSON.stringify(payload)});await loadTasks();updateTaskStatsOnly();renderTaskRows();}
+function taskModal(t=null){
+  showModal(`${t?'تعديل':'إضافة'} مهمة`,`<form id="taskForm" class="form-grid task-form"><div class="field full"><label>عنوان المهمة *</label><input class="input" name="title" required minlength="2" maxlength="180" value="${esc(t?.title||'')}" placeholder="مثال: مراجعة خطة سداد المورد"></div><div class="field full"><label>ملاحظة</label><textarea class="input" name="description" maxlength="1500" rows="3" placeholder="تفاصيل مختصرة...">${esc(t?.description||'')}</textarea></div><div class="field"><label>الأولوية</label><select class="select" name="priority"><option value="urgent">عاجلة</option><option value="important">مهمة</option><option value="normal">عادية</option></select></div><div class="field"><label>الحالة</label><select class="select" name="status"><option value="new">جديدة</option><option value="in_progress">قيد التنفيذ</option><option value="postponed">مؤجلة</option><option value="completed">مكتملة</option></select></div><div class="field"><label>تاريخ الاستحقاق</label><input class="input" type="date" name="due_date" value="${esc(t?.due_date||isoToday())}"></div><div class="field"><label>الفرع</label><select class="select" name="branch_id"><option value="">عام / بدون فرع</option>${branchOptions(false,false)}</select></div></form>`,async()=>{const f=document.getElementById('taskForm');if(!f.reportValidity())return false;const fd=new FormData(f);await taskSave({id:t?.id,title:String(fd.get('title')||'').trim(),description:String(fd.get('description')||'').trim(),priority:fd.get('priority'),status:fd.get('status'),due_date:fd.get('due_date')||null,branch_id:fd.get('branch_id')||null});toast('تم حفظ المهمة');return true;},{saveText:'حفظ المهمة'});
+  const f=document.getElementById('taskForm');if(f){f.elements.priority.value=t?.priority||'normal';f.elements.status.value=t?.status||'new';f.elements.branch_id.value=t?.branch_id||'';}
 }
 
 async function itemsView(main){
