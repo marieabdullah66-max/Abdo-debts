@@ -9,6 +9,7 @@ const state = {
   branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], paymentPlans: [], users: [], categories: [], items: [], notifications: [],
   notificationUnread: 0, notificationTimer: null, authRefreshTimer: null,
   tasks: [], taskFilter: 'today', taskSearch: '', tasksSection: 'tasks', noteBooks: [], dailyNotes: [], selectedNoteBookId: '', notesSearch: '',
+  employees: [], selectedEmployeeId: '', employeeRecords: [], employeeSearch: '', employeeMonth: isoToday().slice(0,7), employeeRecordType: 'absence',
   supplierBranchId: '',
   supplierCategoryId: '',
   supplierSort: 'balance_desc',
@@ -52,12 +53,13 @@ const PERMISSION_LABELS = {
   view_doctor_sales:'عرض مبيعات الدكاترة',
   view_payment_plans:'عرض خطة السداد', manage_payment_plans:'إدارة خطة السداد',
   use_tasks:'استخدام مهامي',
-  use_daily_notes:'استخدام ملاحظات الموظفين'
+  use_daily_notes:'استخدام ملاحظات الموظفين',
+  use_employee_records:'إدارة حسابات الموظفين'
 };
 const ROLE_LABELS = {admin:'مدير', finance:'مالي', viewer:'مشاهدة فقط'};
 const ROLE_DEFAULTS = {
   admin: Object.fromEntries(Object.keys(PERMISSION_LABELS).map(k=>[k,true])),
-  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true,view_doctor_sales:true,view_payment_plans:true,manage_payment_plans:true,use_tasks:true,use_daily_notes:true},
+  finance: {view_dashboard:true,view_suppliers:true,manage_suppliers:true,view_invoices:true,create_invoices:true,edit_invoices:true,view_payments:true,create_payments:true,edit_payments:true,view_reports:true,view_item_analysis:true,manage_item_catalog:true,view_doctor_sales:true,view_payment_plans:true,manage_payment_plans:true,use_tasks:true,use_daily_notes:true,use_employee_records:true},
   viewer: {view_dashboard:true,view_suppliers:true,view_invoices:true,view_payments:true,view_reports:true,view_item_analysis:true,view_doctor_sales:true,view_payment_plans:true}
 };
 const STATUS_LABELS = {unpaid:'غير مسددة', partial:'جزئي', paid:'مسددة'};
@@ -1306,16 +1308,17 @@ function taskFilteredRows(){
 function taskStats(){const today=isoToday(),rows=state.tasks||[];return {today:rows.filter(t=>t.status!=='completed'&&taskDate(t.due_date)===today).length,overdue:rows.filter(t=>t.status!=='completed'&&taskDate(t.due_date)&&taskDate(t.due_date)<today).length,urgent:rows.filter(t=>t.status!=='completed'&&t.priority==='urgent').length,open:rows.filter(t=>t.status!=='completed').length};}
 async function tasksView(main){
   if(!can('use_daily_notes') && state.tasksSection==='notes')state.tasksSection='tasks';
+  if(!can('use_employee_records') && state.tasksSection==='employees')state.tasksSection='tasks';
   await loadTasks();
   const stats=taskStats();
   const installCard=isStandalonePwa()?'':`<section class="task-install-card"><div><strong>خلي مهامي على الشاشة الرئيسية</strong><span id="taskInstallHint">${esc(installHelpText())}</span></div><button class="btn btn-soft btn-sm" id="taskInstallBtnSmall" type="button">تثبيت / شرح</button></section>`;
-  main.innerHTML=`<div class="tasks-shell"><div class="tasks-hero"><div><span class="tasks-kicker">Abdo Tasks</span><h2>مهامي</h2><p>مهامك وملاحظاتك الخاصة بحسابك فقط — تصميم مناسب للهاتف Android و iOS.</p></div><div class="tasks-hero-actions">${isStandalonePwa()?'':`<button class="btn btn-light task-install-btn" id="taskInstallBtn" type="button">تثبيت مهامي</button>`}<button class="btn btn-primary task-add-main" id="addTaskTop">+ مهمة</button></div></div>${installCard}<div class="task-main-tabs"><button class="task-main-tab ${state.tasksSection==='tasks'?'active':''}" data-task-section="tasks">✅ المهام</button>${can('use_daily_notes')?`<button class="task-main-tab ${state.tasksSection==='notes'?'active':''}" data-task-section="notes">📝 الملاحظات اليومية</button>`:''}</div><div id="taskMainSection"></div></div>`;
+  main.innerHTML=`<div class="tasks-shell"><div class="tasks-hero"><div><span class="tasks-kicker">Abdo Tasks</span><h2>مهامي</h2><p>مهامك وملاحظاتك وحسابات الموظفين الخاصة بحسابك فقط — تصميم مناسب للهاتف Android و iOS.</p></div><div class="tasks-hero-actions">${isStandalonePwa()?'':`<button class="btn btn-light task-install-btn" id="taskInstallBtn" type="button">تثبيت مهامي</button>`}<button class="btn btn-primary task-add-main" id="addTaskTop">+ مهمة</button></div></div>${installCard}<div class="task-main-tabs"><button class="task-main-tab ${state.tasksSection==='tasks'?'active':''}" data-task-section="tasks">✅ المهام</button>${can('use_daily_notes')?`<button class="task-main-tab ${state.tasksSection==='notes'?'active':''}" data-task-section="notes">📝 الملاحظات اليومية</button>`:''}${can('use_employee_records')?`<button class="task-main-tab ${state.tasksSection==='employees'?'active':''}" data-task-section="employees">👥 الموظفين</button>`:''}</div><div id="taskMainSection"></div></div>`;
   const topAdd=document.getElementById('addTaskTop');if(topAdd)topAdd.onclick=()=>{state.tasksSection='tasks';renderTasksSection();taskModal();};
   const installBtn=document.getElementById('taskInstallBtn');if(installBtn)installBtn.onclick=installTasksShortcut;
   const installBtnSmall=document.getElementById('taskInstallBtnSmall');if(installBtnSmall)installBtnSmall.onclick=installTasksShortcut;
   updateTaskInstallHint();
-  main.querySelectorAll('[data-task-section]').forEach(b=>b.onclick=async()=>{state.tasksSection=b.dataset.taskSection;main.querySelectorAll('[data-task-section]').forEach(x=>x.classList.toggle('active',x.dataset.taskSection===state.tasksSection));if(state.tasksSection==='notes')await renderNotesSection();else renderTasksSection();});
-  if(state.tasksSection==='notes')await renderNotesSection();else renderTasksSection();
+  main.querySelectorAll('[data-task-section]').forEach(b=>b.onclick=async()=>{state.tasksSection=b.dataset.taskSection;main.querySelectorAll('[data-task-section]').forEach(x=>x.classList.toggle('active',x.dataset.taskSection===state.tasksSection));if(state.tasksSection==='notes')await renderNotesSection();else if(state.tasksSection==='employees')await renderEmployeesSection();else renderTasksSection();});
+  if(state.tasksSection==='notes')await renderNotesSection();else if(state.tasksSection==='employees')await renderEmployeesSection();else renderTasksSection();
 }
 
 function renderTasksSection(){
@@ -1432,6 +1435,85 @@ function noteBookModal(book=null){
 function dailyNoteModal(bookId,n=null){
   showModal(`${n?'تعديل':'إضافة'} ملاحظة`,`<form id="dailyNoteForm" class="form-grid task-form"><div class="field"><label>التاريخ</label><input class="input" type="date" name="note_date" value="${esc(n?.note_date||isoToday())}"></div><div class="field"><label>الأهمية</label><select class="select" name="priority"><option value="urgent">عاجلة</option><option value="important">مهمة</option><option value="normal">عادية</option></select></div><div class="field full"><label>الملاحظة *</label><textarea class="input" name="note_text" required minlength="2" maxlength="2500" rows="5" placeholder="اكتب الملاحظة اليومية هنا...">${esc(n?.note_text||'')}</textarea></div><label class="check-card full"><input type="checkbox" name="followed_up" ${n?.followed_up?'checked':''}> تمت المتابعة</label></form>`,async()=>{const f=document.getElementById('dailyNoteForm');if(!f.reportValidity())return false;const fd=new FormData(f);const payload={note_text:String(fd.get('note_text')||'').trim(),note_date:fd.get('note_date')||null,priority:fd.get('priority')||'normal',followed_up:!!f.elements.followed_up.checked};await api(n?`/api/tasks/notes/${n.id}`:`/api/tasks/note-books/${bookId}/notes`,{method:n?'PUT':'POST',body:JSON.stringify(payload)});toast('تم حفظ الملاحظة');await renderNotesSection();return true;},{saveText:'حفظ الملاحظة'});
   const f=document.getElementById('dailyNoteForm');if(f)f.elements.priority.value=n?.priority||'normal';
+}
+
+
+const EMPLOYEE_RECORD_LABELS={absence:'الغيابات',withdrawal:'السحوبات',credit:'حساب الأجل',overtime:'الإضافي'};
+const EMPLOYEE_RECORD_ICONS={absence:'🔴',withdrawal:'💵',credit:'🧾',overtime:'⏱️'};
+async function loadEmployees(){state.employees=await api('/api/tasks/employees');}
+async function loadEmployeeRecords(employeeId){
+  const q=new URLSearchParams();if(state.employeeMonth)q.set('month',state.employeeMonth);
+  state.employeeRecords=employeeId?await api(`/api/tasks/employees/${employeeId}/records?${q.toString()}`):[];
+}
+function employeesFiltered(){const q=String(state.employeeSearch||'').trim().toLowerCase();let rows=[...(state.employees||[])];if(q)rows=rows.filter(x=>String(x.name||'').toLowerCase().includes(q));return rows;}
+function currentEmployee(){return (state.employees||[]).find(x=>x.id===state.selectedEmployeeId)||null;}
+function employeeTotals(){
+  const rows=state.employeeRecords||[],employee=currentEmployee(),sum=type=>rows.filter(x=>x.record_type===type).reduce((a,x)=>a+Number(x.amount||0),0);
+  const base=Number(employee?.base_salary||0),absence=sum('absence'),withdrawal=sum('withdrawal'),credit=sum('credit'),overtime=sum('overtime');
+  return {base,absence,withdrawal,credit,overtime,net:base+overtime-absence-withdrawal-credit};
+}
+function employeeMonthLabel(){const m=String(state.employeeMonth||'');if(!/^\d{4}-\d{2}$/.test(m))return 'كل الأشهر';const [y,mo]=m.split('-');return `${mo}/${y}`;}
+async function renderEmployeesSection(){
+  const box=document.getElementById('taskMainSection');if(!box)return;
+  if(!can('use_employee_records')){box.innerHTML='<div class="empty">ليس لديك صلاحية إدارة حسابات الموظفين.</div>';return;}
+  await loadEmployees();
+  if(state.selectedEmployeeId&&!state.employees.some(x=>x.id===state.selectedEmployeeId))state.selectedEmployeeId='';
+  if(state.selectedEmployeeId)await loadEmployeeRecords(state.selectedEmployeeId);else state.employeeRecords=[];
+  const selected=currentEmployee();
+  box.innerHTML=`<section class="panel employees-panel"><div class="employees-head"><div><h3>${selected?esc(selected.name):'الموظفين'}</h3><p>${selected?'المرتب والغيابات والسحوبات وحساب الأجل والإضافي حسب الشهر.':'أضف الموظفين وحدد المرتب الأساسي لكل موظف.'}</p></div><div class="employees-actions">${selected?`<button class="btn btn-soft" id="backToEmployees">الموظفين</button><button class="btn btn-soft" id="editEmployee">تعديل الموظف</button>`:'<button class="btn btn-primary" id="addEmployee">+ موظف</button>'}</div></div>${selected?employeeDetailHtml(selected):employeeListHtml()}</section>`;
+  if(selected){
+    document.getElementById('backToEmployees').onclick=async()=>{state.selectedEmployeeId='';state.employeeRecords=[];await renderEmployeesSection();};
+    document.getElementById('editEmployee').onclick=()=>employeeModal(selected);
+    const month=document.getElementById('employeeMonth');if(month)month.onchange=async()=>{state.employeeMonth=month.value||isoToday().slice(0,7);await loadEmployeeRecords(selected.id);renderEmployeeDetailBody();};
+    bindEmployeeDetailActions();
+  }else{
+    document.getElementById('addEmployee').onclick=()=>employeeModal();
+    const search=document.getElementById('employeeSearch');if(search)search.oninput=e=>{state.employeeSearch=e.target.value;renderEmployeeCardsOnly();};
+    bindEmployeeCardActions();
+  }
+}
+function employeeListHtml(){return `<input class="input employees-search" id="employeeSearch" value="${esc(state.employeeSearch)}" placeholder="بحث باسم الموظف..."><div id="employeeCards">${employeeCardsHtml(employeesFiltered())}</div>`;}
+function employeeCardsHtml(rows){
+  return rows.length?`<div class="employee-card-grid">${rows.map(x=>`<article class="employee-card" data-open-employee="${esc(x.id)}"><div class="employee-card-main"><div class="employee-avatar">${esc(String(x.name||'م').trim().charAt(0)||'م')}</div><div class="employee-copy"><h4>${esc(x.name)}</h4><span>المرتب الأساسي: <b>${money(x.base_salary)}</b></span><small>آخر تحديث · ${esc(fmtDateTime(x.updated_at||x.created_at))}</small></div><span class="employee-chevron">‹</span></div><div class="employee-card-actions"><button class="note-icon-btn" title="تعديل" data-edit-employee="${esc(x.id)}">✎</button><button class="note-icon-btn danger" title="حذف" data-delete-employee="${esc(x.id)}">×</button></div></article>`).join('')}</div>`:'<div class="empty notes-empty">لا يوجد موظفون بعد.<br><span>اضغط «+ موظف» وأدخل الاسم والمرتب الأساسي.</span></div>';
+}
+function renderEmployeeCardsOnly(){const box=document.getElementById('employeeCards');if(box){box.innerHTML=employeeCardsHtml(employeesFiltered());bindEmployeeCardActions();}}
+function employeeDetailHtml(employee){return `<div class="employee-month-row"><div><span>حساب شهر</span><input class="input" id="employeeMonth" type="month" value="${esc(state.employeeMonth||isoToday().slice(0,7))}"></div><div class="employee-base-chip">المرتب الأساسي <strong>${money(employee.base_salary)}</strong></div></div><div id="employeeDetailBody">${employeeDetailBodyHtml(employee)}</div>`;}
+function employeeDetailBodyHtml(employee){
+  const t=employeeTotals(),type=state.employeeRecordType||'absence';
+  return `<div class="employee-summary"><div><span>المرتب الأساسي</span><strong>${money(t.base)}</strong></div><div class="plus"><span>الإضافي</span><strong>+ ${money(t.overtime)}</strong></div><div class="minus"><span>خصم الغياب</span><strong>- ${money(t.absence)}</strong></div><div class="minus"><span>السحوبات</span><strong>- ${money(t.withdrawal)}</strong></div><div class="minus"><span>حساب الأجل</span><strong>- ${money(t.credit)}</strong></div><div class="net"><span>صافي مرتب ${esc(employeeMonthLabel())}</span><strong>${money(t.net)}</strong></div></div><div class="employee-record-tabs">${Object.keys(EMPLOYEE_RECORD_LABELS).map(k=>`<button class="employee-record-tab ${type===k?'active':''}" data-employee-record-type="${k}">${EMPLOYEE_RECORD_ICONS[k]} ${EMPLOYEE_RECORD_LABELS[k]}</button>`).join('')}</div><div class="employee-record-head"><strong>${EMPLOYEE_RECORD_ICONS[type]} ${EMPLOYEE_RECORD_LABELS[type]}</strong><button class="btn btn-primary btn-sm" id="addEmployeeRecord">+ إضافة</button></div><div id="employeeRecordRows">${employeeRecordRowsHtml(type)}</div>`;
+}
+function renderEmployeeDetailBody(){const employee=currentEmployee(),box=document.getElementById('employeeDetailBody');if(!employee||!box)return;box.innerHTML=employeeDetailBodyHtml(employee);bindEmployeeDetailActions();}
+function employeeRecordRowsHtml(type){
+  const rows=(state.employeeRecords||[]).filter(x=>x.record_type===type);
+  return rows.length?`<div class="employee-record-list">${rows.map(employeeRecordCardHtml).join('')}</div>`:`<div class="empty employee-record-empty">لا توجد سجلات في ${esc(EMPLOYEE_RECORD_LABELS[type])} لهذا الشهر.</div>`;
+}
+function employeeRecordCardHtml(r){
+  const type=r.record_type,qty=Number(r.quantity||0);let qtyText='';
+  if(type==='absence'&&qty>0)qtyText=`<span>الأيام: <b>${qty.toLocaleString('en-US',{maximumFractionDigits:2})}</b></span>`;
+  if(type==='overtime'&&qty>0)qtyText=`<span>الساعات: <b>${qty.toLocaleString('en-US',{maximumFractionDigits:2})}</b></span>`;
+  const amountLabel=type==='absence'?'قيمة الخصم':type==='overtime'?'قيمة الإضافي':type==='credit'?'قيمة الأجل':'قيمة السحب';
+  return `<article class="employee-record-card type-${esc(type)}"><div class="employee-record-top"><div><strong>${esc(taskDate(r.record_date)||'بدون تاريخ')}</strong><span>${esc(EMPLOYEE_RECORD_LABELS[type]||type)}</span></div><div class="employee-record-amount"><small>${amountLabel}</small><b>${money(r.amount)}</b></div></div><div class="employee-record-meta">${qtyText}${r.note?`<span class="record-note">${esc(r.note)}</span>`:''}</div><div class="daily-note-actions"><button class="note-action-link" data-edit-employee-record="${esc(r.id)}">تعديل</button><button class="note-action-link danger" data-delete-employee-record="${esc(r.id)}">حذف</button></div></article>`;
+}
+function bindEmployeeCardActions(){
+  document.querySelectorAll('[data-open-employee]').forEach(card=>card.onclick=async(e)=>{if(e.target.closest('button'))return;state.selectedEmployeeId=card.dataset.openEmployee;state.employeeRecordType='absence';await renderEmployeesSection();});
+  document.querySelectorAll('[data-edit-employee]').forEach(b=>b.onclick=()=>employeeModal(state.employees.find(x=>x.id===b.dataset.editEmployee)));
+  document.querySelectorAll('[data-delete-employee]').forEach(b=>b.onclick=async()=>{const employee=state.employees.find(x=>x.id===b.dataset.deleteEmployee);if(!confirmAction(`حذف الموظف ${employee?.name||''} وكل سجلاته؟`))return;try{await api(`/api/tasks/employees/${b.dataset.deleteEmployee}`,{method:'DELETE'});toast('تم حذف الموظف');state.selectedEmployeeId='';await renderEmployeesSection();}catch(e){toast(e.message,true);}});
+}
+function bindEmployeeDetailActions(){
+  document.querySelectorAll('[data-employee-record-type]').forEach(b=>b.onclick=()=>{state.employeeRecordType=b.dataset.employeeRecordType;renderEmployeeDetailBody();});
+  const add=document.getElementById('addEmployeeRecord');if(add)add.onclick=()=>employeeRecordModal(state.employeeRecordType);
+  document.querySelectorAll('[data-edit-employee-record]').forEach(b=>b.onclick=()=>{const r=state.employeeRecords.find(x=>x.id===b.dataset.editEmployeeRecord);if(r)employeeRecordModal(r.record_type,r);});
+  document.querySelectorAll('[data-delete-employee-record]').forEach(b=>b.onclick=async()=>{if(!confirmAction('حذف هذا السجل؟'))return;try{await api(`/api/tasks/employee-records/${b.dataset.deleteEmployeeRecord}`,{method:'DELETE'});toast('تم حذف السجل');await loadEmployeeRecords(state.selectedEmployeeId);renderEmployeeDetailBody();}catch(e){toast(e.message,true);}});
+}
+function employeeModal(employee=null){
+  showModal(`${employee?'تعديل':'إضافة'} موظف`,`<form id="employeeForm" class="form-grid"><div class="field full"><label>اسم الموظف *</label><input class="input" name="name" required minlength="2" maxlength="160" value="${esc(employee?.name||'')}" placeholder="اسم الموظف"></div><div class="field full"><label>المرتب الأساسي الشهري *</label><input class="input" type="number" name="base_salary" required min="0" step="0.01" inputmode="decimal" value="${esc(employee?.base_salary??'')}" placeholder="مثال: 1500"></div></form>`,async()=>{const f=document.getElementById('employeeForm');if(!f.reportValidity())return false;const fd=new FormData(f),payload={name:String(fd.get('name')||'').trim(),base_salary:Number(fd.get('base_salary')||0)};try{const saved=await api(employee?`/api/tasks/employees/${employee.id}`:'/api/tasks/employees',{method:employee?'PUT':'POST',body:JSON.stringify(payload)});toast('تم حفظ الموظف');if(employee)state.selectedEmployeeId=employee.id;else if(saved?.id)state.selectedEmployeeId=saved.id;await renderEmployeesSection();return true;}catch(e){toast(e.message,true);return false;}},{saveText:'حفظ الموظف'});
+}
+function employeeRecordModal(type,r=null){
+  const label=EMPLOYEE_RECORD_LABELS[type]||type,isAbsence=type==='absence',isOvertime=type==='overtime';
+  const qtyField=isAbsence?`<div class="field"><label>عدد أيام الغياب</label><input class="input" type="number" name="quantity" min="0" step="0.25" inputmode="decimal" value="${esc(r?.quantity??'')}" placeholder="مثال: 1"></div>`:isOvertime?`<div class="field"><label>عدد ساعات الإضافي</label><input class="input" type="number" name="quantity" min="0" step="0.25" inputmode="decimal" value="${esc(r?.quantity??'')}" placeholder="مثال: 3"></div>`:'';
+  const amountLabel=isAbsence?'قيمة خصم الغياب':isOvertime?'قيمة الإضافي':type==='credit'?'قيمة حساب الأجل':'قيمة السحب';
+  const noteLabel=type==='credit'?'البيان / ماذا أخذ على الحساب':'ملاحظة';
+  showModal(`${r?'تعديل':'إضافة'} ${label}`,`<form id="employeeRecordForm" class="form-grid"><div class="field"><label>التاريخ *</label><input class="input" type="date" name="record_date" required value="${esc(r?.record_date||isoToday())}"></div>${qtyField}<div class="field ${(!isAbsence&&!isOvertime)?'full':''}"><label>${amountLabel} *</label><input class="input" type="number" name="amount" required min="0" step="0.01" inputmode="decimal" value="${esc(r?.amount??'')}" placeholder="0.00"></div><div class="field full"><label>${noteLabel}</label><textarea class="input" name="note" maxlength="1500" rows="3" placeholder="اختياري...">${esc(r?.note||'')}</textarea></div></form>`,async()=>{const f=document.getElementById('employeeRecordForm');if(!f.reportValidity())return false;const fd=new FormData(f),payload={record_type:type,record_date:fd.get('record_date')||isoToday(),quantity:Number(fd.get('quantity')||0),amount:Number(fd.get('amount')||0),note:String(fd.get('note')||'').trim()||null};try{await api(r?`/api/tasks/employee-records/${r.id}`:`/api/tasks/employees/${state.selectedEmployeeId}/records`,{method:r?'PUT':'POST',body:JSON.stringify(payload)});toast(`تم حفظ ${label}`);await loadEmployeeRecords(state.selectedEmployeeId);renderEmployeeDetailBody();return true;}catch(e){toast(e.message,true);return false;}},{saveText:'حفظ'});
 }
 
 async function itemsView(main){

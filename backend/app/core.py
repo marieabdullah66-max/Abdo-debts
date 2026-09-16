@@ -38,7 +38,7 @@ PERMISSION_KEYS = {
     "view_item_analysis", "manage_item_catalog",
     "view_doctor_sales",
     "view_payment_plans", "manage_payment_plans",
-    "use_tasks", "use_daily_notes",
+    "use_tasks", "use_daily_notes", "use_employee_records",
 }
 
 ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
@@ -61,6 +61,7 @@ ROLE_DEFAULT_PERMISSIONS: dict[str, dict[str, bool]] = {
         "manage_payment_plans": True,
         "use_tasks": True,
         "use_daily_notes": True,
+        "use_employee_records": True,
     },
     "viewer": {
         "view_dashboard": True,
@@ -391,6 +392,19 @@ class DailyNoteInput(BaseModel):
     note_date: date | None = None
     priority: Literal["urgent", "important", "normal"] = "normal"
     followed_up: bool = False
+
+
+class EmployeeInput(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    base_salary: float = Field(default=0, ge=0, le=10000000)
+
+
+class EmployeeRecordInput(BaseModel):
+    record_type: Literal["absence", "withdrawal", "credit", "overtime"]
+    record_date: date | None = None
+    quantity: float = Field(default=0, ge=0, le=100000)
+    amount: float = Field(default=0, ge=0, le=10000000)
+    note: str | None = Field(default=None, max_length=1500)
 
 class UserCreateInput(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
