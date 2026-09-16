@@ -70,7 +70,7 @@ async def list_invoices(
         safe = q.strip().replace("%", "")[:80]
         if safe:
             params["invoice_number"] = f"ilike.*{safe}*"
-    rows = await sb("GET", "/rest/v1/invoice_balances", service=True, params=params)
+    rows = await sb_paged("/rest/v1/invoice_balances", service=True, params=params, max_rows=100000)
     for row in rows or []:
         row["suppliers"] = {"name": row.get("supplier_name")}
         row["branches"] = {"name": row.get("branch_name")}

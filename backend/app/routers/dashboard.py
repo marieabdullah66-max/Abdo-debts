@@ -1,3 +1,4 @@
+import asyncio
 from collections import defaultdict
 from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException
@@ -122,11 +123,11 @@ async def dashboard(
         aging_params["branch_id"] = f"eq.{branch_id}"
 
     if category_id:
-        links = await sb(
-            "GET",
+        links = await sb_paged(
             "/rest/v1/supplier_category_links",
             service=True,
-            params={"select": "supplier_id", "category_id": f"eq.{category_id}", "limit": "10000"},
+            params={"select": "supplier_id", "category_id": f"eq.{category_id}"},
+            max_rows=100000,
         )
         supplier_ids = sorted({str(x.get("supplier_id")) for x in links or [] if x.get("supplier_id")})
         if not supplier_ids:
@@ -148,9 +149,11 @@ async def dashboard(
     _apply_date_bounds(inv_params, "invoice_date", start_date, end_date)
     _apply_date_bounds(pay_params, "payment_date", start_date, end_date)
 
-    invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=inv_params)
-    payments = await sb("GET", "/rest/v1/payments", service=True, params=pay_params)
-    aging_invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=aging_params)
+    invoices, payments, aging_invoices = await asyncio.gather(
+        sb_paged("/rest/v1/invoice_balances", service=True, params=inv_params, max_rows=100000),
+        sb_paged("/rest/v1/payments", service=True, params=pay_params, max_rows=100000),
+        sb_paged("/rest/v1/invoice_balances", service=True, params=aging_params, max_rows=100000),
+    )
     aging = _calculate_aging(aging_invoices or [])
 
     today = date.today().isoformat()

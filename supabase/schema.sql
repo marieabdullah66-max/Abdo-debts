@@ -993,3 +993,43 @@ revoke all on table public.report_drafts,
 from anon, authenticated;
 
 -- END V85_repair_hardening.sql
+
+-- BEGIN V86_employee_branch_performance.sql
+-- V86 — Shared employees by branch + long-term paging support
+alter table public.employee_cards
+  add column if not exists branch_id uuid references public.branches(id) on delete restrict;
+
+with one_branch as (
+  select profile_id, min(branch_id::text)::uuid as branch_id
+  from public.profile_branches
+  group by profile_id
+  having count(*) = 1
+)
+update public.employee_cards ec
+set branch_id = ob.branch_id
+from one_branch ob
+where ec.branch_id is null
+  and ec.user_id = ob.profile_id;
+
+alter table public.employee_records
+  drop constraint if exists employee_records_employee_owner_fk;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'employee_records_employee_fk'
+      AND conrelid = 'public.employee_records'::regclass
+  ) THEN
+    ALTER TABLE public.employee_records
+      ADD CONSTRAINT employee_records_employee_fk
+      FOREIGN KEY (employee_id) REFERENCES public.employee_cards(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+create index if not exists idx_employee_cards_branch_name
+  on public.employee_cards(branch_id, name);
+create index if not exists idx_employee_records_employee_date
+  on public.employee_records(employee_id, record_date desc, created_at desc);
+revoke all on table public.employee_cards, public.employee_records from anon, authenticated;
+-- END V86_employee_branch_performance.sql

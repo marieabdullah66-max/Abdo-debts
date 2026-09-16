@@ -37,14 +37,14 @@ def _status_for(row: dict[str, Any], today: date) -> tuple[str, int | None]:
 
 
 async def _supplier_branch_balance(supplier_id: str, branch_id: str) -> float:
-    rows = await sb(
-        "GET", "/rest/v1/invoice_balances", service=True,
+    rows = await sb_paged(
+        "/rest/v1/invoice_balances", service=True,
         params={
             "select": "balance",
             "supplier_id": f"eq.{supplier_id}",
             "branch_id": f"eq.{branch_id}",
-            "limit": "10000",
         },
+        max_rows=100000,
     )
     return round(sum(float(x.get("balance") or 0) for x in rows or []), 2)
 
@@ -59,7 +59,7 @@ async def _open_plan_total(supplier_id: str, branch_id: str, exclude_id: str | N
     }
     if exclude_id:
         params["id"] = f"neq.{exclude_id}"
-    rows = await sb("GET", "/rest/v1/payment_plans", service=True, params=params)
+    rows = await sb_paged("/rest/v1/payment_plans", service=True, params=params, max_rows=100000)
     return round(sum(float(x.get("planned_amount") or 0) for x in rows or []), 2)
 
 
@@ -105,7 +105,7 @@ async def _decorate(rows: list[dict[str, Any]], profile: dict[str, Any]) -> list
     # One balance query keeps the list useful without one request per plan.
     inv_params: dict[str, str] = {"select": "supplier_id,branch_id,balance", "limit": "10000"}
     inv_params = apply_branch_filter(inv_params, profile)
-    invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=inv_params) or []
+    invoices = await sb_paged("/rest/v1/invoice_balances", service=True, params=inv_params, max_rows=100000)
     balances: dict[tuple[str, str], float] = {}
     for inv in invoices:
         key = (inv.get("supplier_id"), inv.get("branch_id"))
@@ -184,7 +184,7 @@ async def list_payment_plans(
         params["branch_id"] = f"eq.{branch_id}"
     if supplier_id:
         params["supplier_id"] = f"eq.{supplier_id}"
-    rows = await sb("GET", "/rest/v1/payment_plans", service=True, params=params) or []
+    rows = await sb_paged("/rest/v1/payment_plans", service=True, params=params, max_rows=100000)
     decorated = await _decorate(rows, profile)
     return {"items": decorated, "summary": _summary(rows)}
 

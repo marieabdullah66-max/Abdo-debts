@@ -19,7 +19,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
 SUPABASE_SERVICE_ROLE_KEY = (os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")).strip()
 FRONTEND = ROOT / "frontend"
-APP_VERSION = "85.0.0"
+APP_VERSION = "86.0.0"
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are required in backend/.env")
@@ -131,6 +131,46 @@ async def sb(method: str, path: str, token: str | None = None, *, service: bool 
     return response.json() if "json" in ctype else response.content
 
 
+
+
+async def sb_paged(
+    path: str,
+    *,
+    params: dict[str, str] | None = None,
+    token: str | None = None,
+    service: bool = False,
+    page_size: int = 1000,
+    max_rows: int = 100000,
+) -> list[dict[str, Any]]:
+    """Read a PostgREST collection without silently truncating at a fixed limit.
+
+    Supabase/PostgREST projects commonly cap a single response at 1,000 rows even
+    when a larger ``limit`` is requested. V86 pages with HTTP Range so financial
+    totals and historical lists do not quietly lose older rows as the database grows.
+    """
+    safe_page_size = max(1, min(int(page_size or 1000), 1000))
+    safe_max_rows = max(safe_page_size, min(int(max_rows or 100000), 250000))
+    query = dict(params or {})
+    query.pop("limit", None)
+    rows: list[dict[str, Any]] = []
+    offset = 0
+    while offset < safe_max_rows:
+        page = await sb(
+            "GET",
+            path,
+            token,
+            service=service,
+            params=query,
+            headers={"Range": f"{offset}-{min(offset + safe_page_size - 1, safe_max_rows - 1)}"},
+        )
+        batch = page or []
+        if not isinstance(batch, list):
+            raise HTTPException(500, "استجابة قاعدة البيانات غير متوقعة")
+        rows.extend(batch)
+        if len(batch) < safe_page_size:
+            break
+        offset += safe_page_size
+    return rows
 
 
 def is_expired_jwt_error(exc: HTTPException) -> bool:
@@ -398,6 +438,7 @@ class DailyNoteInput(BaseModel):
 class EmployeeInput(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     base_salary: float = Field(default=0, ge=0, le=10000000)
+    branch_id: str | None = None
 
 
 class EmployeeRecordInput(BaseModel):

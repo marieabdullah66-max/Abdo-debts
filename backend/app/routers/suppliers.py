@@ -185,7 +185,7 @@ async def _external_balances(branch_id: str | None, profile: dict[str, Any]) -> 
         require_branch_access(profile, branch_id)
         params["branch_id"] = f"eq.{branch_id}"
     try:
-        return await sb("GET", "/rest/v1/supplier_external_balances", service=True, params=params) or []
+        return await sb_paged("/rest/v1/supplier_external_balances", service=True, params=params, max_rows=100000)
     except HTTPException as exc:
         detail = str(getattr(exc, "detail", ""))
         if "supplier_external_balances" in detail or "does not exist" in detail:
@@ -323,7 +323,7 @@ async def _category_map(supplier_ids: list[str] | None = None) -> dict[str, list
         for rows in result.values():
             rows.sort(key=lambda x: (x.get("name") or "").lower())
         return result
-    links = await sb("GET", "/rest/v1/supplier_category_links", service=True, params=params)
+    links = await sb_paged("/rest/v1/supplier_category_links", service=True, params=params, max_rows=100000)
     result: dict[str, list[dict[str, Any]]] = {}
     for link in links or []:
         supplier_id = link.get("supplier_id")
@@ -553,11 +553,10 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
     # suppliers visible and make payments immediately reduce "دين علينا".
     if include_balance and branch_id:
         require_branch_access(profile, branch_id)
-        invoice_rows = await sb("GET", "/rest/v1/invoice_balances", service=True, params={
+        invoice_rows = await sb_paged("/rest/v1/invoice_balances", service=True, params={
             "select": "supplier_id,branch_id,balance,invoice_date",
             "branch_id": f"eq.{branch_id}",
-            "limit": "10000",
-        }) or []
+        }, max_rows=100000)
         external_rows = await _external_balances(branch_id, profile)
         financials = _supplier_financial_maps(invoice_rows, external_rows)
         pair_balances = financials["signed_by_pair"]
@@ -617,7 +616,7 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
     params = {"select": "id,name,phone,notes,active,created_at", "active": "eq.true", "order": "name.asc", "limit": "5000"}
     if safe:
         params["name"] = f"ilike.*{safe}*"
-    suppliers = await sb("GET", "/rest/v1/suppliers", service=True, params=params)
+    suppliers = await sb_paged("/rest/v1/suppliers", service=True, params=params, max_rows=50000)
     supplier_ids_loaded = [row.get("id") for row in suppliers or [] if row.get("id")]
     categories_by_supplier = await _category_map(supplier_ids_loaded if len(supplier_ids_loaded) <= 1000 else None)
 
@@ -629,7 +628,7 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
     if branch_id:
         require_branch_access(profile, branch_id)
         inv_params["branch_id"] = f"eq.{branch_id}"
-    invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=inv_params) or []
+    invoices = await sb_paged("/rest/v1/invoice_balances", service=True, params=inv_params, max_rows=100000)
     external_rows = await _external_balances(branch_id, profile)
     financials = _supplier_financial_maps(invoices, external_rows)
     pair_balances: dict[tuple[str, str], float] = financials["signed_by_pair"]
@@ -746,7 +745,7 @@ async def supplier_summary(supplier_id: str, profile: dict[str, Any] = Depends(c
         "select": "id,invoice_number,amount,paid_amount,balance,status,invoice_date,due_date,notes,pdf_path,branch_id,branch_name",
         "supplier_id": f"eq.{supplier_id}", "order": "invoice_date.desc", "limit": "5000"
     }, profile)
-    invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=params)
+    invoices = await sb_paged("/rest/v1/invoice_balances", service=True, params=params, max_rows=100000)
     totals = {
         "invoiced": round(sum(float(x.get("amount") or 0) for x in invoices or []), 2),
         "paid": round(sum(float(x.get("paid_amount") or 0) for x in invoices or []), 2),

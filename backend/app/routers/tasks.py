@@ -262,10 +262,7 @@ async def delete_daily_note(note_id: str, profile: dict[str, Any] = Depends(curr
     return {"ok": True}
 
 
-# V81 - Employee payroll/activity cards inside Abdo Tasks
-
-def _employee_params(employee_id: str, profile: dict[str, Any]) -> dict[str, str]:
-    return {"id": f"eq.{employee_id}", "user_id": f"eq.{profile['id']}"}
+# V81/V86 - Employee payroll/activity cards inside Abdo Tasks
 
 
 def _clean_employee_payload(data: EmployeeInput) -> dict[str, Any]:
@@ -299,70 +296,133 @@ def _month_bounds(month: str | None) -> tuple[str | None, str | None]:
     return f"{year:04d}-{mon:02d}-01", f"{year:04d}-{mon + 1:02d}-01"
 
 
-@router.get("/employees")
-async def list_employees(profile: dict[str, Any] = Depends(current_profile)) -> Any:
-    require_permission(profile, "use_employee_records")
+async def _ensure_employee_branch(branch_id: str | None, profile: dict[str, Any], *, required: bool) -> str | None:
+    """Resolve and validate the branch used for a shared employee card."""
+    value = (branch_id or "").strip() or None
+    if value:
+        require_branch_access(profile, value)
+        rows = await sb(
+            "GET",
+            "/rest/v1/branches",
+            service=True,
+            params={"select": "id", "id": f"eq.{value}", "active": "eq.true", "limit": "1"},
+        )
+        if not rows:
+            raise HTTPException(422, "الفرع غير موجود أو موقوف")
+        return value
+
+    allowed = branch_ids_for(profile)
+    if allowed is not None and len(allowed) == 1:
+        return next(iter(allowed))
+    if required:
+        raise HTTPException(422, "اختر الفرع الخاص بالموظف")
+    return None
+
+
+def _employee_accessible(card: dict[str, Any], profile: dict[str, Any]) -> bool:
+    branch_id = card.get("branch_id")
+    if branch_id:
+        allowed = branch_ids_for(profile)
+        return allowed is None or str(branch_id) in allowed
+    # V86 keeps old unassigned cards private until the owner assigns a branch.
+    return str(card.get("user_id") or "") == str(profile.get("id") or "")
+
+
+async def _employee_card(employee_id: str, profile: dict[str, Any]) -> dict[str, Any]:
     rows = await sb(
         "GET",
         "/rest/v1/employee_cards",
         service=True,
         params={
-            "select": "id,name,base_salary,created_at,updated_at",
-            "user_id": f"eq.{profile['id']}",
-            "order": "name.asc,created_at.asc",
-            "limit": "1000",
+            "select": "id,user_id,branch_id,name,base_salary,created_at,updated_at,branches(name)",
+            "id": f"eq.{employee_id}",
+            "limit": "1",
         },
     )
-    return rows or []
+    if not rows or not _employee_accessible(rows[0], profile):
+        raise HTTPException(404, "الموظف غير موجود")
+    return rows[0]
 
 
-@router.get("/employees/report")
-async def employee_report_data(month: str | None = None, profile: dict[str, Any] = Depends(current_profile)) -> Any:
-    """Return all employee cards + one month's records in two DB queries/paged reads.
+async def _employee_cards(profile: dict[str, Any], branch_id: str | None = None) -> list[dict[str, Any]]:
+    select = "id,user_id,branch_id,name,base_salary,created_at,updated_at,branches(name)"
+    if branch_id:
+        require_branch_access(profile, branch_id)
+        rows = await sb_paged(
+            "/rest/v1/employee_cards",
+            service=True,
+            params={"select": select, "branch_id": f"eq.{branch_id}", "order": "name.asc,created_at.asc"},
+            max_rows=10000,
+        )
+        return rows
 
-    V83 PDF fetched records once per employee. V85 keeps the same PDF layout but
-    avoids N+1 API/database requests when the employee count grows.
-    """
-    require_permission(profile, "use_employee_records")
-    employees = await sb(
+    allowed = branch_ids_for(profile)
+    shared_params: dict[str, str] = {"select": select, "branch_id": "not.is.null", "order": "name.asc,created_at.asc"}
+    shared_params = apply_branch_filter(shared_params, profile)
+    shared = await sb_paged(
+        "/rest/v1/employee_cards",
+        service=True,
+        params=shared_params,
+        max_rows=10000,
+    )
+    legacy = await sb(
         "GET",
         "/rest/v1/employee_cards",
         service=True,
         params={
-            "select": "id,name,base_salary,created_at,updated_at",
+            "select": select,
+            "branch_id": "is.null",
             "user_id": f"eq.{profile['id']}",
             "order": "name.asc,created_at.asc",
             "limit": "1000",
         },
     ) or []
+    merged = {str(row.get("id")): row for row in [*shared, *legacy]}
+    return sorted(merged.values(), key=lambda row: (str((row.get("branches") or {}).get("name") or ""), str(row.get("name") or "").casefold()))
+
+
+@router.get("/employees")
+async def list_employees(branch_id: str | None = None, profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    require_permission(profile, "use_employee_records")
+    return await _employee_cards(profile, branch_id)
+
+
+@router.get("/employees/report")
+async def employee_report_data(
+    month: str | None = None,
+    branch_id: str | None = None,
+    profile: dict[str, Any] = Depends(current_profile),
+) -> Any:
+    """Return visible employee cards and one month's records without N+1 reads."""
+    require_permission(profile, "use_employee_records")
+    employees = await _employee_cards(profile, branch_id)
+    employee_ids = [str(x.get("id")) for x in employees if x.get("id")]
+    if not employee_ids:
+        return {"employees": [], "records": []}
+
     params: dict[str, str] = {
-        "select": "id,employee_id,record_type,record_date,quantity,amount,note,created_at,updated_at",
-        "user_id": f"eq.{profile['id']}",
+        "select": "id,user_id,employee_id,record_type,record_date,quantity,amount,note,created_at,updated_at",
+        "employee_id": f"in.({','.join(employee_ids)})",
         "order": "record_date.desc,created_at.desc",
     }
     start, end = _month_bounds(month)
     if start and end:
         params["and"] = f"(record_date.gte.{start},record_date.lt.{end})"
-    records: list[dict[str, Any]] = []
-    for offset in range(0, 50000, 1000):
-        page = await sb(
-            "GET",
-            "/rest/v1/employee_records",
-            service=True,
-            params=params,
-            headers={"Range": f"{offset}-{offset + 999}"},
-        )
-        records.extend(page or [])
-        if len(page or []) < 1000:
-            break
+    records = await sb_paged(
+        "/rest/v1/employee_records",
+        service=True,
+        params=params,
+        max_rows=100000,
+    )
     return {"employees": employees, "records": records}
 
 
 @router.post("/employees")
 async def create_employee(data: EmployeeInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "use_employee_records")
+    branch_id = await _ensure_employee_branch(data.branch_id, profile, required=True)
     payload = _clean_employee_payload(data)
-    payload["user_id"] = profile["id"]
+    payload.update({"user_id": profile["id"], "branch_id": branch_id})
     rows = await sb(
         "POST",
         "/rest/v1/employee_cards",
@@ -376,13 +436,21 @@ async def create_employee(data: EmployeeInput, profile: dict[str, Any] = Depends
 @router.put("/employees/{employee_id}")
 async def update_employee(employee_id: str, data: EmployeeInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "use_employee_records")
+    current = await _employee_card(employee_id, profile)
+    branch_id = await _ensure_employee_branch(data.branch_id, profile, required=False)
+    if branch_id is None:
+        branch_id = current.get("branch_id")
+    if not branch_id:
+        raise HTTPException(422, "اختر الفرع الخاص بالموظف")
+    payload = _clean_employee_payload(data)
+    payload["branch_id"] = branch_id
     rows = await sb(
         "PATCH",
         "/rest/v1/employee_cards",
         service=True,
         headers={"Prefer": "return=representation"},
-        params=_employee_params(employee_id, profile),
-        json=_clean_employee_payload(data),
+        params={"id": f"eq.{employee_id}"},
+        json=payload,
     )
     if not rows:
         raise HTTPException(404, "الموظف غير موجود")
@@ -392,49 +460,35 @@ async def update_employee(employee_id: str, data: EmployeeInput, profile: dict[s
 @router.delete("/employees/{employee_id}")
 async def delete_employee(employee_id: str, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "use_employee_records")
-    await sb("DELETE", "/rest/v1/employee_cards", service=True, params=_employee_params(employee_id, profile))
+    await _employee_card(employee_id, profile)
+    await sb("DELETE", "/rest/v1/employee_cards", service=True, params={"id": f"eq.{employee_id}"})
     return {"ok": True}
 
 
 @router.get("/employees/{employee_id}/records")
 async def list_employee_records(employee_id: str, month: str | None = None, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "use_employee_records")
-    employee = await sb(
-        "GET",
-        "/rest/v1/employee_cards",
-        service=True,
-        params={**_employee_params(employee_id, profile), "select": "id", "limit": "1"},
-    )
-    if not employee:
-        raise HTTPException(404, "الموظف غير موجود")
+    await _employee_card(employee_id, profile)
     params: dict[str, str] = {
-        "select": "id,employee_id,record_type,record_date,quantity,amount,note,created_at,updated_at",
+        "select": "id,user_id,employee_id,record_type,record_date,quantity,amount,note,created_at,updated_at",
         "employee_id": f"eq.{employee_id}",
-        "user_id": f"eq.{profile['id']}",
         "order": "record_date.desc,created_at.desc",
-        "limit": "5000",
     }
     start, end = _month_bounds(month)
     if start and end:
-        params["record_date"] = f"gte.{start}"
-        # PostgREST cannot express two filters with the same dict key, so use an AND expression.
-        params.pop("record_date", None)
         params["and"] = f"(record_date.gte.{start},record_date.lt.{end})"
-    rows = await sb("GET", "/rest/v1/employee_records", service=True, params=params)
-    return rows or []
+    return await sb_paged(
+        "/rest/v1/employee_records",
+        service=True,
+        params=params,
+        max_rows=25000,
+    )
 
 
 @router.post("/employees/{employee_id}/records")
 async def create_employee_record(employee_id: str, data: EmployeeRecordInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "use_employee_records")
-    employee = await sb(
-        "GET",
-        "/rest/v1/employee_cards",
-        service=True,
-        params={**_employee_params(employee_id, profile), "select": "id", "limit": "1"},
-    )
-    if not employee:
-        raise HTTPException(404, "الموظف غير موجود")
+    await _employee_card(employee_id, profile)
     payload = _clean_employee_record_payload(data)
     payload.update({"user_id": profile["id"], "employee_id": employee_id})
     rows = await sb(
@@ -447,15 +501,29 @@ async def create_employee_record(employee_id: str, data: EmployeeRecordInput, pr
     return rows[0]
 
 
+async def _employee_record(record_id: str, profile: dict[str, Any]) -> dict[str, Any]:
+    rows = await sb(
+        "GET",
+        "/rest/v1/employee_records",
+        service=True,
+        params={"select": "id,employee_id", "id": f"eq.{record_id}", "limit": "1"},
+    )
+    if not rows:
+        raise HTTPException(404, "السجل غير موجود")
+    await _employee_card(str(rows[0]["employee_id"]), profile)
+    return rows[0]
+
+
 @router.put("/employee-records/{record_id}")
 async def update_employee_record(record_id: str, data: EmployeeRecordInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "use_employee_records")
+    await _employee_record(record_id, profile)
     rows = await sb(
         "PATCH",
         "/rest/v1/employee_records",
         service=True,
         headers={"Prefer": "return=representation"},
-        params={"id": f"eq.{record_id}", "user_id": f"eq.{profile['id']}"},
+        params={"id": f"eq.{record_id}"},
         json=_clean_employee_record_payload(data),
     )
     if not rows:
@@ -466,10 +534,6 @@ async def update_employee_record(record_id: str, data: EmployeeRecordInput, prof
 @router.delete("/employee-records/{record_id}")
 async def delete_employee_record(record_id: str, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "use_employee_records")
-    await sb(
-        "DELETE",
-        "/rest/v1/employee_records",
-        service=True,
-        params={"id": f"eq.{record_id}", "user_id": f"eq.{profile['id']}"},
-    )
+    await _employee_record(record_id, profile)
+    await sb("DELETE", "/rest/v1/employee_records", service=True, params={"id": f"eq.{record_id}"})
     return {"ok": True}

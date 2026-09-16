@@ -50,7 +50,7 @@ async def list_payments(supplier_id: str | None = None, branch_id: str | None = 
     if branch_id:
         require_branch_access(profile, branch_id)
         params["branch_id"] = f"eq.{branch_id}"
-    return await sb("GET", "/rest/v1/payments", service=True, params=params)
+    return await sb_paged("/rest/v1/payments", service=True, params=params, max_rows=100000)
 
 @router.get("/{payment_id}")
 async def get_payment(payment_id: str, profile: dict[str, Any] = Depends(current_profile)) -> Any:
