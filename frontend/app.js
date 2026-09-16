@@ -1438,8 +1438,8 @@ function dailyNoteModal(bookId,n=null){
 }
 
 
-const EMPLOYEE_RECORD_LABELS={absence:'الغيابات',withdrawal:'السحوبات',credit:'حساب الأجل',overtime:'الإضافي'};
-const EMPLOYEE_RECORD_ICONS={absence:'🔴',withdrawal:'💵',credit:'🧾',overtime:'⏱️'};
+const EMPLOYEE_RECORD_LABELS={absence:'الغيابات',withdrawal:'السحوبات',credit:'حساب الأجل',overtime:'الإضافي',note:'ملاحظات'};
+const EMPLOYEE_RECORD_ICONS={absence:'🔴',withdrawal:'💵',credit:'🧾',overtime:'⏱️',note:'📝'};
 async function loadEmployees(){state.employees=await api('/api/tasks/employees');}
 async function loadEmployeeRecords(employeeId){
   const q=new URLSearchParams();if(state.employeeMonth)q.set('month',state.employeeMonth);
@@ -1460,7 +1460,7 @@ async function renderEmployeesSection(){
   if(state.selectedEmployeeId&&!state.employees.some(x=>x.id===state.selectedEmployeeId))state.selectedEmployeeId='';
   if(state.selectedEmployeeId)await loadEmployeeRecords(state.selectedEmployeeId);else state.employeeRecords=[];
   const selected=currentEmployee();
-  box.innerHTML=`<section class="panel employees-panel"><div class="employees-head"><div><h3>${selected?esc(selected.name):'الموظفين'}</h3><p>${selected?'المرتب والغيابات والسحوبات وحساب الأجل والإضافي حسب الشهر.':'أضف الموظفين وحدد المرتب الأساسي لكل موظف.'}</p></div><div class="employees-actions">${selected?`<button class="btn btn-soft" id="backToEmployees">الموظفين</button><button class="btn btn-soft" id="editEmployee">تعديل الموظف</button>`:'<button class="btn btn-primary" id="addEmployee">+ موظف</button>'}</div></div>${selected?employeeDetailHtml(selected):employeeListHtml()}</section>`;
+  box.innerHTML=`<section class="panel employees-panel"><div class="employees-head"><div><h3>${selected?esc(selected.name):'الموظفين'}</h3><p>${selected?'المرتب والغيابات والسحوبات وحساب الأجل والإضافي والملاحظات حسب الشهر.':'أضف الموظفين وحدد المرتب الأساسي لكل موظف.'}</p></div><div class="employees-actions">${selected?`<button class="btn btn-soft" id="backToEmployees">الموظفين</button><button class="btn btn-soft" id="editEmployee">تعديل الموظف</button>`:'<button class="btn btn-primary" id="addEmployee">+ موظف</button>'}</div></div>${selected?employeeDetailHtml(selected):employeeListHtml()}</section>`;
   if(selected){
     document.getElementById('backToEmployees').onclick=async()=>{state.selectedEmployeeId='';state.employeeRecords=[];await renderEmployeesSection();};
     document.getElementById('editEmployee').onclick=()=>employeeModal(selected);
@@ -1488,11 +1488,12 @@ function employeeRecordRowsHtml(type){
   return rows.length?`<div class="employee-record-list">${rows.map(employeeRecordCardHtml).join('')}</div>`:`<div class="empty employee-record-empty">لا توجد سجلات في ${esc(EMPLOYEE_RECORD_LABELS[type])} لهذا الشهر.</div>`;
 }
 function employeeRecordCardHtml(r){
-  const type=r.record_type,qty=Number(r.quantity||0);let qtyText='';
+  const type=r.record_type,qty=Number(r.quantity||0),isNote=type==='note';let qtyText='';
   if(type==='absence'&&qty>0)qtyText=`<span>الأيام: <b>${qty.toLocaleString('en-US',{maximumFractionDigits:2})}</b></span>`;
   if(type==='overtime'&&qty>0)qtyText=`<span>الساعات: <b>${qty.toLocaleString('en-US',{maximumFractionDigits:2})}</b></span>`;
   const amountLabel=type==='absence'?'قيمة الخصم':type==='overtime'?'قيمة الإضافي':type==='credit'?'قيمة الأجل':'قيمة السحب';
-  return `<article class="employee-record-card type-${esc(type)}"><div class="employee-record-top"><div><strong>${esc(taskDate(r.record_date)||'بدون تاريخ')}</strong><span>${esc(EMPLOYEE_RECORD_LABELS[type]||type)}</span></div><div class="employee-record-amount"><small>${amountLabel}</small><b>${money(r.amount)}</b></div></div><div class="employee-record-meta">${qtyText}${r.note?`<span class="record-note">${esc(r.note)}</span>`:''}</div><div class="daily-note-actions"><button class="note-action-link" data-edit-employee-record="${esc(r.id)}">تعديل</button><button class="note-action-link danger" data-delete-employee-record="${esc(r.id)}">حذف</button></div></article>`;
+  const amountHtml=isNote?'':`<div class="employee-record-amount"><small>${amountLabel}</small><b>${money(r.amount)}</b></div>`;
+  return `<article class="employee-record-card type-${esc(type)}"><div class="employee-record-top"><div><strong>${esc(taskDate(r.record_date)||'بدون تاريخ')}</strong><span>${esc(EMPLOYEE_RECORD_LABELS[type]||type)}</span></div>${amountHtml}</div><div class="employee-record-meta">${qtyText}${r.note?`<span class="record-note">${esc(r.note)}</span>`:''}</div><div class="daily-note-actions"><button class="note-action-link" data-edit-employee-record="${esc(r.id)}">تعديل</button><button class="note-action-link danger" data-delete-employee-record="${esc(r.id)}">حذف</button></div></article>`;
 }
 function bindEmployeeCardActions(){
   document.querySelectorAll('[data-open-employee]').forEach(card=>card.onclick=async(e)=>{if(e.target.closest('button'))return;state.selectedEmployeeId=card.dataset.openEmployee;state.employeeRecordType='absence';await renderEmployeesSection();});
@@ -1509,11 +1510,14 @@ function employeeModal(employee=null){
   showModal(`${employee?'تعديل':'إضافة'} موظف`,`<form id="employeeForm" class="form-grid"><div class="field full"><label>اسم الموظف *</label><input class="input" name="name" required minlength="2" maxlength="160" value="${esc(employee?.name||'')}" placeholder="اسم الموظف"></div><div class="field full"><label>المرتب الأساسي الشهري *</label><input class="input" type="number" name="base_salary" required min="0" step="0.01" inputmode="decimal" value="${esc(employee?.base_salary??'')}" placeholder="مثال: 1500"></div></form>`,async()=>{const f=document.getElementById('employeeForm');if(!f.reportValidity())return false;const fd=new FormData(f),payload={name:String(fd.get('name')||'').trim(),base_salary:Number(fd.get('base_salary')||0)};try{const saved=await api(employee?`/api/tasks/employees/${employee.id}`:'/api/tasks/employees',{method:employee?'PUT':'POST',body:JSON.stringify(payload)});toast('تم حفظ الموظف');if(employee)state.selectedEmployeeId=employee.id;else if(saved?.id)state.selectedEmployeeId=saved.id;await renderEmployeesSection();return true;}catch(e){toast(e.message,true);return false;}},{saveText:'حفظ الموظف'});
 }
 function employeeRecordModal(type,r=null){
-  const label=EMPLOYEE_RECORD_LABELS[type]||type,isAbsence=type==='absence',isOvertime=type==='overtime';
+  const label=EMPLOYEE_RECORD_LABELS[type]||type,isAbsence=type==='absence',isOvertime=type==='overtime',isNote=type==='note';
   const qtyField=isAbsence?`<div class="field"><label>عدد أيام الغياب</label><input class="input" type="number" name="quantity" min="0" step="0.25" inputmode="decimal" value="${esc(r?.quantity??'')}" placeholder="مثال: 1"></div>`:isOvertime?`<div class="field"><label>عدد ساعات الإضافي</label><input class="input" type="number" name="quantity" min="0" step="0.25" inputmode="decimal" value="${esc(r?.quantity??'')}" placeholder="مثال: 3"></div>`:'';
   const amountLabel=isAbsence?'قيمة خصم الغياب':isOvertime?'قيمة الإضافي':type==='credit'?'قيمة حساب الأجل':'قيمة السحب';
-  const noteLabel=type==='credit'?'البيان / ماذا أخذ على الحساب':'ملاحظة';
-  showModal(`${r?'تعديل':'إضافة'} ${label}`,`<form id="employeeRecordForm" class="form-grid"><div class="field"><label>التاريخ *</label><input class="input" type="date" name="record_date" required value="${esc(r?.record_date||isoToday())}"></div>${qtyField}<div class="field ${(!isAbsence&&!isOvertime)?'full':''}"><label>${amountLabel} *</label><input class="input" type="number" name="amount" required min="0" step="0.01" inputmode="decimal" value="${esc(r?.amount??'')}" placeholder="0.00"></div><div class="field full"><label>${noteLabel}</label><textarea class="input" name="note" maxlength="1500" rows="3" placeholder="اختياري...">${esc(r?.note||'')}</textarea></div></form>`,async()=>{const f=document.getElementById('employeeRecordForm');if(!f.reportValidity())return false;const fd=new FormData(f),payload={record_type:type,record_date:fd.get('record_date')||isoToday(),quantity:Number(fd.get('quantity')||0),amount:Number(fd.get('amount')||0),note:String(fd.get('note')||'').trim()||null};try{await api(r?`/api/tasks/employee-records/${r.id}`:`/api/tasks/employees/${state.selectedEmployeeId}/records`,{method:r?'PUT':'POST',body:JSON.stringify(payload)});toast(`تم حفظ ${label}`);await loadEmployeeRecords(state.selectedEmployeeId);renderEmployeeDetailBody();return true;}catch(e){toast(e.message,true);return false;}},{saveText:'حفظ'});
+  const amountField=isNote?'':`<div class="field ${(!isAbsence&&!isOvertime)?'full':''}"><label>${amountLabel} *</label><input class="input" type="number" name="amount" required min="0" step="0.01" inputmode="decimal" value="${esc(r?.amount??'')}" placeholder="0.00"></div>`;
+  const noteLabel=isNote?'الملاحظة *':type==='credit'?'البيان / ماذا أخذ على الحساب':'ملاحظة';
+  const noteRequired=isNote?'required minlength="2"':'';
+  const notePlaceholder=isNote?'اكتب ملاحظة الموظف هنا...':'اختياري...';
+  showModal(`${r?'تعديل':'إضافة'} ${label}`,`<form id="employeeRecordForm" class="form-grid"><div class="field ${isNote?'full':''}"><label>التاريخ *</label><input class="input" type="date" name="record_date" required value="${esc(r?.record_date||isoToday())}"></div>${qtyField}${amountField}<div class="field full"><label>${noteLabel}</label><textarea class="input" name="note" ${noteRequired} maxlength="1500" rows="4" placeholder="${notePlaceholder}">${esc(r?.note||'')}</textarea></div></form>`,async()=>{const f=document.getElementById('employeeRecordForm');if(!f.reportValidity())return false;const fd=new FormData(f),payload={record_type:type,record_date:fd.get('record_date')||isoToday(),quantity:isNote?0:Number(fd.get('quantity')||0),amount:isNote?0:Number(fd.get('amount')||0),note:String(fd.get('note')||'').trim()||null};try{await api(r?`/api/tasks/employee-records/${r.id}`:`/api/tasks/employees/${state.selectedEmployeeId}/records`,{method:r?'PUT':'POST',body:JSON.stringify(payload)});toast(`تم حفظ ${label}`);await loadEmployeeRecords(state.selectedEmployeeId);renderEmployeeDetailBody();return true;}catch(e){toast(e.message,true);return false;}},{saveText:'حفظ'});
 }
 
 async function itemsView(main){

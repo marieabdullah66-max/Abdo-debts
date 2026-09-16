@@ -400,7 +400,7 @@ class EmployeeInput(BaseModel):
 
 
 class EmployeeRecordInput(BaseModel):
-    record_type: Literal["absence", "withdrawal", "credit", "overtime"]
+    record_type: Literal["absence", "withdrawal", "credit", "overtime", "note"]
     record_date: date | None = None
     quantity: float = Field(default=0, ge=0, le=100000)
     amount: float = Field(default=0, ge=0, le=10000000)
