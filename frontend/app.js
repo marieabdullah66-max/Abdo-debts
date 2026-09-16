@@ -8,7 +8,7 @@ const state = {
   profile: null,
   branches: [], suppliers: [], supplierRows: [], invoices: [], payments: [], paymentPlans: [], users: [], categories: [], items: [], notifications: [],
   notificationUnread: 0, notificationTimer: null, authRefreshTimer: null,
-  tasks: [], taskFilter: 'today', taskSearch: '', tasksSection: 'tasks', noteBooks: [], dailyNotes: [], selectedNoteBookId: '', notesSearch: '',
+  tasks: [], taskFilter: 'today', taskSearch: '', tasksSection: 'employees', noteBooks: [], dailyNotes: [], selectedNoteBookId: '', notesSearch: '',
   employees: [], selectedEmployeeId: '', employeeRecords: [], employeeSearch: '', employeeMonth: isoToday().slice(0,7), employeeRecordType: 'absence',
   supplierBranchId: '',
   supplierCategoryId: '',
@@ -1312,7 +1312,7 @@ async function tasksView(main){
   await loadTasks();
   const stats=taskStats();
   const installCard=isStandalonePwa()?'':`<section class="task-install-card"><div><strong>خلي مهامي على الشاشة الرئيسية</strong><span id="taskInstallHint">${esc(installHelpText())}</span></div><button class="btn btn-soft btn-sm" id="taskInstallBtnSmall" type="button">تثبيت / شرح</button></section>`;
-  main.innerHTML=`<div class="tasks-shell"><div class="tasks-hero"><div><span class="tasks-kicker">Abdo Tasks</span><h2>مهامي</h2><p>مهامك وملاحظاتك وحسابات الموظفين الخاصة بحسابك فقط — تصميم مناسب للهاتف Android و iOS.</p></div><div class="tasks-hero-actions">${isStandalonePwa()?'':`<button class="btn btn-light task-install-btn" id="taskInstallBtn" type="button">تثبيت مهامي</button>`}<button class="btn btn-primary task-add-main" id="addTaskTop">+ مهمة</button></div></div>${installCard}<div class="task-main-tabs"><button class="task-main-tab ${state.tasksSection==='tasks'?'active':''}" data-task-section="tasks">✅ المهام</button>${can('use_daily_notes')?`<button class="task-main-tab ${state.tasksSection==='notes'?'active':''}" data-task-section="notes">📝 الملاحظات اليومية</button>`:''}${can('use_employee_records')?`<button class="task-main-tab ${state.tasksSection==='employees'?'active':''}" data-task-section="employees">👥 الموظفين</button>`:''}</div><div id="taskMainSection"></div></div>`;
+  main.innerHTML=`<div class="tasks-shell"><div class="tasks-hero"><div><span class="tasks-kicker">Abdo Tasks</span><h2>مهامي</h2><p>مهامك وملاحظاتك وحسابات الموظفين الخاصة بحسابك فقط — تصميم مناسب للهاتف Android و iOS.</p></div><div class="tasks-hero-actions">${isStandalonePwa()?'':`<button class="btn btn-light task-install-btn" id="taskInstallBtn" type="button">تثبيت مهامي</button>`}<button class="btn btn-primary task-add-main" id="addTaskTop">+ مهمة</button></div></div>${installCard}<div class="task-main-tabs">${can('use_employee_records')?`<button class="task-main-tab ${state.tasksSection==='employees'?'active':''}" data-task-section="employees">👥 الموظفين</button>`:''}${can('use_daily_notes')?`<button class="task-main-tab ${state.tasksSection==='notes'?'active':''}" data-task-section="notes">📝 الملاحظات اليومية</button>`:''}<button class="task-main-tab ${state.tasksSection==='tasks'?'active':''}" data-task-section="tasks">✅ المهام</button></div><div id="taskMainSection"></div></div>`;
   const topAdd=document.getElementById('addTaskTop');if(topAdd)topAdd.onclick=()=>{state.tasksSection='tasks';renderTasksSection();taskModal();};
   const installBtn=document.getElementById('taskInstallBtn');if(installBtn)installBtn.onclick=installTasksShortcut;
   const installBtnSmall=document.getElementById('taskInstallBtnSmall');if(installBtnSmall)installBtnSmall.onclick=installTasksShortcut;
@@ -1453,6 +1453,48 @@ function employeeTotals(){
   return {base,absence,withdrawal,credit,overtime,net:base+overtime-absence-withdrawal-credit};
 }
 function employeeMonthLabel(){const m=String(state.employeeMonth||'');if(!/^\d{4}-\d{2}$/.test(m))return 'كل الأشهر';const [y,mo]=m.split('-');return `${mo}/${y}`;}
+function employeeTotalsFor(employee,records){
+  const rows=Array.isArray(records)?records:[],sum=type=>rows.filter(x=>x.record_type===type).reduce((a,x)=>a+Number(x.amount||0),0);
+  const base=Number(employee?.base_salary||0),absence=sum('absence'),withdrawal=sum('withdrawal'),credit=sum('credit'),overtime=sum('overtime');
+  return {base,absence,withdrawal,credit,overtime,net:base+overtime-absence-withdrawal-credit};
+}
+async function exportEmployeesPdf(){
+  const employees=[...(state.employees||[])];
+  if(!employees.length){toast('لا يوجد موظفون لتصديرهم.',true);return;}
+  const popup=window.open('','_blank');
+  if(!popup){toast('المتصفح منع نافذة التصدير. اسمح بالنوافذ المنبثقة وحاول من جديد.',true);return;}
+  popup.document.open();
+  popup.document.write('<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>جاري تجهيز تقرير الموظفين</title></head><body style="font-family:Tahoma,Arial,sans-serif;direction:rtl;padding:30px">جاري تجهيز تقرير الموظفين...</body></html>');
+  popup.document.close();
+  try{
+    const month=state.employeeMonth||isoToday().slice(0,7),q=new URLSearchParams();if(month)q.set('month',month);
+    const grouped=await Promise.all(employees.map(async employee=>{
+      const records=await api(`/api/tasks/employees/${employee.id}/records?${q.toString()}`);
+      return {employee,records:Array.isArray(records)?records:[],totals:employeeTotalsFor(employee,records)};
+    }));
+    const sum=key=>grouped.reduce((a,x)=>a+Number(x.totals[key]||0),0);
+    const overall={base:sum('base'),overtime:sum('overtime'),absence:sum('absence'),withdrawal:sum('withdrawal'),credit:sum('credit'),net:sum('net')};
+    const summaryRows=grouped.map((x,i)=>`<tr><td>${i+1}</td><td class="name">${esc(x.employee.name||'—')}</td><td class="money">${money(x.totals.base)}</td><td class="money plus">${money(x.totals.overtime)}</td><td class="money minus">${money(x.totals.absence)}</td><td class="money minus">${money(x.totals.withdrawal)}</td><td class="money minus">${money(x.totals.credit)}</td><td class="money net">${money(x.totals.net)}</td></tr>`).join('');
+    const detailSections=grouped.map(({employee,records,totals},idx)=>{
+      const sorted=[...records].sort((a,b)=>String(b.record_date||'').localeCompare(String(a.record_date||''))||String(b.created_at||'').localeCompare(String(a.created_at||'')));
+      const rows=sorted.length?sorted.map((r,i)=>{
+        const type=r.record_type||'',isNote=type==='note',qty=Number(r.quantity||0);
+        const qtyText=type==='absence'&&qty?`${qty.toLocaleString('en-US',{maximumFractionDigits:2})} يوم`:type==='overtime'&&qty?`${qty.toLocaleString('en-US',{maximumFractionDigits:2})} ساعة`:'—';
+        return `<tr><td>${i+1}</td><td>${esc(taskDate(r.record_date)||'—')}</td><td>${esc(EMPLOYEE_RECORD_LABELS[type]||type)}</td><td>${esc(qtyText)}</td><td class="money">${isNote?'—':money(r.amount)}</td><td class="note">${r.note?esc(r.note).replace(/\n/g,'<br>'):'—'}</td></tr>`;
+      }).join(''):`<tr><td colspan="6" class="empty-cell">لا توجد سجلات خلال هذا الشهر.</td></tr>`;
+      return `<section class="employee-detail ${idx?'detail-break':''}"><div class="employee-title"><div><span>الموظف</span><h2>${esc(employee.name||'—')}</h2></div><div class="employee-net"><span>صافي المرتب</span><strong>${money(totals.net)}</strong></div></div><div class="mini-summary"><div><span>الأساسي</span><b>${money(totals.base)}</b></div><div><span>الإضافي</span><b class="plus">+ ${money(totals.overtime)}</b></div><div><span>الغياب</span><b class="minus">- ${money(totals.absence)}</b></div><div><span>السحوبات</span><b class="minus">- ${money(totals.withdrawal)}</b></div><div><span>الأجل</span><b class="minus">- ${money(totals.credit)}</b></div></div><table class="details"><thead><tr><th>#</th><th>التاريخ</th><th>النوع</th><th>الأيام / الساعات</th><th>القيمة</th><th>الملاحظة / البيان</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+    }).join('');
+    const generated=typeof doctorPdfGeneratedAt==='function'?doctorPdfGeneratedAt():new Date().toLocaleString('ar-LY');
+    const monthText=employeeMonthLabel();
+    popup.document.open();
+    popup.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>تقرير الموظفين - ${esc(monthText)}</title><style>
+      @page{size:A4 landscape;margin:9mm}*{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}body{font-family:Tahoma,Arial,sans-serif;color:#173b36;margin:0;background:#fff;direction:rtl}.head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;border-bottom:3px solid #0f6259;padding-bottom:8px;margin-bottom:10px}.head h1{margin:0 0 4px;color:#0f6259;font-size:21px}.meta{font-size:9.5px;color:#60736e;line-height:1.8}.cards{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin:9px 0 11px}.card{border:1px solid #d7e2df;border-radius:8px;padding:7px;background:#f8fbfa;text-align:center}.card span{display:block;color:#667872;font-size:8px}.card strong{display:block;margin-top:2px;font-size:11px;color:#0f6259}.plus{color:#18764f!important}.minus{color:#a13b3b!important}.net{color:#0f6259!important;font-weight:800}.section-title{margin:13px 0 7px;color:#0f6259;font-size:14px}table{width:100%;border-collapse:collapse;font-size:8.5px;table-layout:fixed}thead{display:table-header-group}th,td{border:1px solid #dbe5e2;padding:5px;text-align:center;vertical-align:middle;word-break:break-word}th{background:#0f6259;color:#fff}.name{text-align:right;font-weight:700}.money{direction:ltr;white-space:nowrap;font-variant-numeric:tabular-nums}tbody tr:nth-child(even){background:#f7faf9}.employee-detail{margin-top:14px;break-inside:auto}.detail-break{break-before:auto}.employee-title{display:flex;justify-content:space-between;align-items:end;gap:10px;background:#eaf5f1;border:1px solid #cfe2dc;border-right:5px solid #0f6259;border-radius:9px;padding:7px 9px;margin-bottom:6px;break-after:avoid}.employee-title span,.employee-net span{display:block;color:#6b7f79;font-size:8px}.employee-title h2{margin:1px 0 0;font-size:14px;color:#0f6259}.employee-net{text-align:left}.employee-net strong{display:block;margin-top:2px;color:#0f6259;font-size:13px}.mini-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-bottom:6px;break-inside:avoid}.mini-summary div{border:1px solid #dce7e3;border-radius:7px;padding:5px 6px;text-align:center;background:#fafcfc}.mini-summary span{display:block;font-size:7.5px;color:#6a7d77}.mini-summary b{display:block;font-size:9px;margin-top:2px}.details th:nth-child(1){width:4%}.details th:nth-child(2){width:12%}.details th:nth-child(3){width:13%}.details th:nth-child(4){width:14%}.details th:nth-child(5){width:14%}.details th:nth-child(6){width:43%}.details .note{text-align:right;line-height:1.55}.empty-cell{padding:10px;color:#758681}.foot{display:flex;justify-content:space-between;gap:12px;border-top:1px solid #dfe7e4;margin-top:12px;padding-top:6px;color:#758681;font-size:8px}.no-print{text-align:center;margin:12px 0}.no-print button{padding:8px 18px;border:0;border-radius:8px;background:#0f6259;color:#fff;font:inherit;font-weight:700}@media print{.no-print{display:none}.employee-title,.mini-summary{box-shadow:none}}
+    </style></head><body><header class="head"><div><h1>تقرير الموظفين</h1><div class="meta">الشهر: <strong>${esc(monthText)}</strong><br>عدد الموظفين: <strong>${employees.length.toLocaleString('en-US')}</strong></div></div><div class="meta">Abdo Debts<br>تاريخ التصدير: ${esc(generated)}</div></header><div class="cards"><div class="card"><span>إجمالي المرتبات الأساسية</span><strong>${money(overall.base)}</strong></div><div class="card"><span>إجمالي الإضافي</span><strong class="plus">${money(overall.overtime)}</strong></div><div class="card"><span>إجمالي خصم الغياب</span><strong class="minus">${money(overall.absence)}</strong></div><div class="card"><span>إجمالي السحوبات</span><strong class="minus">${money(overall.withdrawal)}</strong></div><div class="card"><span>إجمالي حساب الأجل</span><strong class="minus">${money(overall.credit)}</strong></div><div class="card"><span>إجمالي صافي المرتبات</span><strong>${money(overall.net)}</strong></div></div><h2 class="section-title">ملخص كل الموظفين</h2><table><thead><tr><th>#</th><th style="width:20%">الموظف</th><th>المرتب الأساسي</th><th>الإضافي</th><th>خصم الغياب</th><th>السحوبات</th><th>حساب الأجل</th><th>الصافي</th></tr></thead><tbody>${summaryRows}</tbody></table><h2 class="section-title">تفاصيل الموظفين</h2>${detailSections}<div class="foot"><span>الحساب: الأساسي + الإضافي − الغياب − السحوبات − حساب الأجل.</span><span>Abdo Debts</span></div><div class="no-print"><button onclick="print()">حفظ كـ PDF / طباعة</button></div></body></html>`);
+    popup.document.close();
+    toast('تم تجهيز تقرير الموظفين PDF.');
+    setTimeout(()=>{try{popup.focus();popup.print();}catch{}},450);
+  }catch(e){try{popup.close();}catch{}toast(e.message||'تعذر تصدير تقرير الموظفين',true);}
+}
 async function renderEmployeesSection(){
   const box=document.getElementById('taskMainSection');if(!box)return;
   if(!can('use_employee_records')){box.innerHTML='<div class="empty">ليس لديك صلاحية إدارة حسابات الموظفين.</div>';return;}
@@ -1460,7 +1502,7 @@ async function renderEmployeesSection(){
   if(state.selectedEmployeeId&&!state.employees.some(x=>x.id===state.selectedEmployeeId))state.selectedEmployeeId='';
   if(state.selectedEmployeeId)await loadEmployeeRecords(state.selectedEmployeeId);else state.employeeRecords=[];
   const selected=currentEmployee();
-  box.innerHTML=`<section class="panel employees-panel"><div class="employees-head"><div><h3>${selected?esc(selected.name):'الموظفين'}</h3><p>${selected?'المرتب والغيابات والسحوبات وحساب الأجل والإضافي والملاحظات حسب الشهر.':'أضف الموظفين وحدد المرتب الأساسي لكل موظف.'}</p></div><div class="employees-actions">${selected?`<button class="btn btn-soft" id="backToEmployees">الموظفين</button><button class="btn btn-soft" id="editEmployee">تعديل الموظف</button>`:'<button class="btn btn-primary" id="addEmployee">+ موظف</button>'}</div></div>${selected?employeeDetailHtml(selected):employeeListHtml()}</section>`;
+  box.innerHTML=`<section class="panel employees-panel"><div class="employees-head"><div><h3>${selected?esc(selected.name):'الموظفين'}</h3><p>${selected?'المرتب والغيابات والسحوبات وحساب الأجل والإضافي والملاحظات حسب الشهر.':'أضف الموظفين وحدد المرتب الأساسي لكل موظف.'}</p></div><div class="employees-actions">${selected?`<button class="btn btn-soft" id="backToEmployees">الموظفين</button><button class="btn btn-soft" id="editEmployee">تعديل الموظف</button>`:'<button class="btn btn-soft" id="exportEmployeesPdf">تصدير PDF</button><button class="btn btn-primary" id="addEmployee">+ موظف</button>'}</div></div>${selected?employeeDetailHtml(selected):employeeListHtml()}</section>`;
   if(selected){
     document.getElementById('backToEmployees').onclick=async()=>{state.selectedEmployeeId='';state.employeeRecords=[];await renderEmployeesSection();};
     document.getElementById('editEmployee').onclick=()=>employeeModal(selected);
@@ -1468,11 +1510,13 @@ async function renderEmployeesSection(){
     bindEmployeeDetailActions();
   }else{
     document.getElementById('addEmployee').onclick=()=>employeeModal();
+    const exportBtn=document.getElementById('exportEmployeesPdf');if(exportBtn)exportBtn.onclick=exportEmployeesPdf;
+    const month=document.getElementById('employeesReportMonth');if(month)month.onchange=e=>{state.employeeMonth=e.target.value||isoToday().slice(0,7);};
     const search=document.getElementById('employeeSearch');if(search)search.oninput=e=>{state.employeeSearch=e.target.value;renderEmployeeCardsOnly();};
     bindEmployeeCardActions();
   }
 }
-function employeeListHtml(){return `<input class="input employees-search" id="employeeSearch" value="${esc(state.employeeSearch)}" placeholder="بحث باسم الموظف..."><div id="employeeCards">${employeeCardsHtml(employeesFiltered())}</div>`;}
+function employeeListHtml(){return `<div class="employee-list-toolbar"><div><span>شهر التقرير</span><input class="input" id="employeesReportMonth" type="month" value="${esc(state.employeeMonth||isoToday().slice(0,7))}"></div><input class="input employees-search" id="employeeSearch" value="${esc(state.employeeSearch)}" placeholder="بحث باسم الموظف..."></div><div id="employeeCards">${employeeCardsHtml(employeesFiltered())}</div>`;}
 function employeeCardsHtml(rows){
   return rows.length?`<div class="employee-card-grid">${rows.map(x=>`<article class="employee-card" data-open-employee="${esc(x.id)}"><div class="employee-card-main"><div class="employee-avatar">${esc(String(x.name||'م').trim().charAt(0)||'م')}</div><div class="employee-copy"><h4>${esc(x.name)}</h4><span>المرتب الأساسي: <b>${money(x.base_salary)}</b></span><small>آخر تحديث · ${esc(fmtDateTime(x.updated_at||x.created_at))}</small></div><span class="employee-chevron">‹</span></div><div class="employee-card-actions"><button class="note-icon-btn" title="تعديل" data-edit-employee="${esc(x.id)}">✎</button><button class="note-icon-btn danger" title="حذف" data-delete-employee="${esc(x.id)}">×</button></div></article>`).join('')}</div>`:'<div class="empty notes-empty">لا يوجد موظفون بعد.<br><span>اضغط «+ موظف» وأدخل الاسم والمرتب الأساسي.</span></div>';
 }
