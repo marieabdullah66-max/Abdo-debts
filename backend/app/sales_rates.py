@@ -67,6 +67,7 @@ async def _all_catalog() -> list[dict[str, Any]]:
 async def _all_reports(profile: dict[str, Any], branch_id: str | None = None) -> list[dict[str, Any]]:
     params: dict[str, str] = {
         "select": "id,branch_id,period_start,period_end,days_count,created_at,branches(name)",
+        "is_current": "eq.true",
         "order": "created_at.desc,period_end.desc",
     }
     params = apply_branch_filter(params, profile)

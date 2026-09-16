@@ -316,6 +316,48 @@ async def list_employees(profile: dict[str, Any] = Depends(current_profile)) -> 
     return rows or []
 
 
+@router.get("/employees/report")
+async def employee_report_data(month: str | None = None, profile: dict[str, Any] = Depends(current_profile)) -> Any:
+    """Return all employee cards + one month's records in two DB queries/paged reads.
+
+    V83 PDF fetched records once per employee. V85 keeps the same PDF layout but
+    avoids N+1 API/database requests when the employee count grows.
+    """
+    require_permission(profile, "use_employee_records")
+    employees = await sb(
+        "GET",
+        "/rest/v1/employee_cards",
+        service=True,
+        params={
+            "select": "id,name,base_salary,created_at,updated_at",
+            "user_id": f"eq.{profile['id']}",
+            "order": "name.asc,created_at.asc",
+            "limit": "1000",
+        },
+    ) or []
+    params: dict[str, str] = {
+        "select": "id,employee_id,record_type,record_date,quantity,amount,note,created_at,updated_at",
+        "user_id": f"eq.{profile['id']}",
+        "order": "record_date.desc,created_at.desc",
+    }
+    start, end = _month_bounds(month)
+    if start and end:
+        params["and"] = f"(record_date.gte.{start},record_date.lt.{end})"
+    records: list[dict[str, Any]] = []
+    for offset in range(0, 50000, 1000):
+        page = await sb(
+            "GET",
+            "/rest/v1/employee_records",
+            service=True,
+            params=params,
+            headers={"Range": f"{offset}-{offset + 999}"},
+        )
+        records.extend(page or [])
+        if len(page or []) < 1000:
+            break
+    return {"employees": employees, "records": records}
+
+
 @router.post("/employees")
 async def create_employee(data: EmployeeInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "use_employee_records")

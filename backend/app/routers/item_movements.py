@@ -536,7 +536,7 @@ async def _parse_and_resolve(file: UploadFile) -> dict[str, Any]:
 async def _report(report_id: str, profile: dict[str, Any]) -> dict[str, Any]:
     rows = await sb(
         "GET", "/rest/v1/item_movement_reports", service=True,
-        params={"select": "id,branch_id,period_start,period_end,days_count", "id": f"eq.{report_id}", "limit": "1"},
+        params={"select": "id,branch_id,period_start,period_end,days_count", "id": f"eq.{report_id}", "is_current": "eq.true", "limit": "1"},
     )
     if not rows:
         raise HTTPException(404, "تقرير الحركة غير موجود")
@@ -611,18 +611,8 @@ async def import_report(
     require_branch_access(profile, branch_id)
     parsed = await _parse_and_resolve(file)
 
-    # Re-uploading the exact same branch + period replaces that analysis. Name
-    # mappings live in a separate table, so already learned aliases are retained.
-    existing = await sb(
-        "GET", "/rest/v1/item_movement_reports", service=True,
-        params={
-            "select": "id", "branch_id": f"eq.{branch_id}",
-            "period_start": f"eq.{parsed['period_start']}", "period_end": f"eq.{parsed['period_end']}", "limit": "1",
-        },
-    )
-    if existing:
-        await sb("DELETE", "/rest/v1/item_movement_reports", service=True, params={"id": f"eq.{existing[0]['id']}"})
-
+    # V85: stage the replacement first. The existing report stays visible until
+    # every row has been saved successfully, then one DB function swaps versions.
     report_rows = await sb(
         "POST", "/rest/v1/item_movement_reports", service=True,
         headers={"Prefer": "return=representation"},
@@ -637,28 +627,42 @@ async def import_report(
             "unique_item_count": parsed["unique_item_count"],
             "unresolved_count": parsed["unresolved_count"],
             "created_by": profile["id"],
+            "is_current": False,
         },
     )
     report = report_rows[0]
-    payload = []
-    for row in parsed["rows"]:
-        payload.append({
-            "report_id": report["id"],
-            "report_name": row["report_name"][:300],
-            "report_name_norm": row["report_name_norm"][:300],
-            "item_id": row["item_id"],
-            "boxes_sold": row["boxes_sold"],
-            "loose_sold": row["loose_sold"],
-            "units_per_box": row["units_per_box"],
-            "equivalent_boxes": row["equivalent_boxes"],
-            "daily_rate": row["daily_rate"],
-            "matched_by": row["matched_by"],
-        })
-    for start in range(0, len(payload), 400):
+    try:
+        payload = []
+        for row in parsed["rows"]:
+            payload.append({
+                "report_id": report["id"],
+                "report_name": row["report_name"][:300],
+                "report_name_norm": row["report_name_norm"][:300],
+                "item_id": row["item_id"],
+                "boxes_sold": row["boxes_sold"],
+                "loose_sold": row["loose_sold"],
+                "units_per_box": row["units_per_box"],
+                "equivalent_boxes": row["equivalent_boxes"],
+                "daily_rate": row["daily_rate"],
+                "matched_by": row["matched_by"],
+            })
+        for start in range(0, len(payload), 400):
+            await sb(
+                "POST", "/rest/v1/item_movement_rows", service=True,
+                headers={"Prefer": "return=minimal"}, json=payload[start:start + 400],
+            )
         await sb(
-            "POST", "/rest/v1/item_movement_rows", service=True,
-            headers={"Prefer": "return=minimal"}, json=payload[start:start + 400],
+            "POST", "/rest/v1/rpc/activate_item_movement_report", service=True,
+            json={"p_report_id": report["id"]},
         )
+    except Exception:
+        # Best effort cleanup. Even if cleanup itself fails, is_current=false means
+        # users keep seeing the previous complete report.
+        try:
+            await sb("DELETE", "/rest/v1/item_movement_reports", service=True, params={"id": f"eq.{report['id']}"})
+        except Exception:
+            pass
+        raise
     return {"ok": True, "report_id": report["id"], **{k: v for k, v in parsed.items() if k != "rows"}}
 
 
@@ -670,6 +674,7 @@ async def list_reports(
     require_permission(profile, "view_item_analysis")
     params: dict[str, str] = {
         "select": "id,branch_id,source_name,source_filename,period_start,period_end,days_count,transaction_count,unique_item_count,unresolved_count,created_at,branches(name)",
+        "is_current": "eq.true",
         "order": "period_end.desc,created_at.desc", "limit": "100",
     }
     params = apply_branch_filter(params, profile)

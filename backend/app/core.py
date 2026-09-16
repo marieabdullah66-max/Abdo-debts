@@ -19,6 +19,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
 SUPABASE_SERVICE_ROLE_KEY = (os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")).strip()
 FRONTEND = ROOT / "frontend"
+APP_VERSION = "85.0.0"
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY are required in backend/.env")
@@ -409,7 +410,7 @@ class EmployeeRecordInput(BaseModel):
 class UserCreateInput(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     username: str = Field(min_length=3, max_length=30, pattern=r"^[A-Za-z0-9._-]+$")
-    password: str = Field(min_length=6, max_length=100)
+    password: str = Field(min_length=10, max_length=100)
     role: Literal["admin", "finance", "viewer"] = "finance"
     all_branches: bool = False
     branch_ids: list[str] = Field(default_factory=list, max_length=100)
@@ -419,7 +420,7 @@ class UserCreateInput(BaseModel):
 class UserUpdateInput(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     username: str = Field(min_length=3, max_length=30, pattern=r"^[A-Za-z0-9._-]+$")
-    password: str | None = Field(default=None, min_length=6, max_length=100)
+    password: str | None = Field(default=None, min_length=10, max_length=100)
     role: Literal["admin", "finance", "viewer"]
     active: bool = True
     all_branches: bool = False

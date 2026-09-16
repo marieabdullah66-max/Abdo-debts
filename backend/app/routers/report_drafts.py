@@ -16,8 +16,11 @@ async def create_or_update_draft(payload:dict[str,Any],profile:dict[str,Any]=Dep
     draft_id=row.get('id')
     if draft_id:
         row.pop('id',None)
-        result=await sb('PATCH',f'/rest/v1/report_drafts?id=eq.{draft_id}',service=True,json=row)
-        return result[0] if result else {'id':draft_id}
+        result=await sb('PATCH',f'/rest/v1/report_drafts?id=eq.{draft_id}&profile_id=eq.{profile["id"]}',service=True,headers={'Prefer':'return=representation'},json=row)
+
+        if not result:
+            raise HTTPException(404,'المسودة غير موجودة أو لا تخص هذا المستخدم')
+        return result[0]
     row.pop('id',None)
     result=await sb('POST','/rest/v1/report_drafts',service=True,json=row)
     return result[0] if result else row

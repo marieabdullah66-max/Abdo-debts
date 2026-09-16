@@ -17,6 +17,8 @@ args = parser.parse_args()
 if not URL or not KEY:
     sys.exit("Missing SUPABASE_URL / SUPABASE_SECRET_KEY in backend/.env")
 username = args.username.strip().lower()
+if len(args.password) < 10:
+    sys.exit("Password must be at least 10 characters")
 headers = {"apikey": KEY, "Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
 with httpx.Client(timeout=30) as client:
     r = client.post(f"{URL}/auth/v1/admin/users", headers=headers, json={

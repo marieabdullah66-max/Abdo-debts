@@ -436,3 +436,560 @@ end;
 $$;
 revoke all on function public.reset_item_catalog() from public, anon, authenticated;
 grant execute on function public.reset_item_catalog() to service_role;
+
+-- ============================================================================
+-- Later production migrations consolidated for fresh V85 installations.
+-- Existing installations should run only supabase/migrations/V85_repair_hardening.sql.
+-- ============================================================================
+
+-- BEGIN V46_report_drafts.sql
+create table if not exists public.report_drafts (
+ id uuid primary key default gen_random_uuid(),
+ profile_id uuid not null references public.profiles(id) on delete cascade,
+ title text,
+ report_period_start text,
+ report_period_end text,
+ prepared_by text,
+ absences text,
+ problems text,
+ notes text,
+ achievements text,
+ next_plan text,
+ created_at timestamptz default now(),
+ updated_at timestamptz default now()
+);
+
+-- END V46_report_drafts.sql
+
+-- BEGIN V65_supplier_external_signed_balances.sql
+-- V65 — Signed supplier external balances
+-- Positive value from supplier report = debt for us.
+-- Negative value from supplier report = debt on us.
+-- Zero = no debt.
+
+create table if not exists public.supplier_external_balances (
+  id uuid primary key default gen_random_uuid(),
+  supplier_id uuid not null references public.suppliers(id) on delete cascade,
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  signed_balance numeric(14,2) not null default 0,
+  reference_no text,
+  last_payment_date date,
+  last_invoice_date date,
+  source text not null default 'supplier_import',
+  created_by uuid references public.profiles(id) on delete set null,
+  updated_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (supplier_id, branch_id)
+);
+
+create index if not exists supplier_external_balances_supplier_idx on public.supplier_external_balances(supplier_id);
+create index if not exists supplier_external_balances_branch_idx on public.supplier_external_balances(branch_id);
+create index if not exists supplier_external_balances_signed_idx on public.supplier_external_balances(signed_balance);
+
+revoke all on table public.supplier_external_balances from anon, authenticated;
+grant all on table public.supplier_external_balances to service_role;
+
+-- END V65_supplier_external_signed_balances.sql
+
+-- BEGIN V72_item_purchase_archive.sql
+-- V72 — Persistent purchase archive for advanced item movement analysis.
+-- Stores the full purchase report once, then monthly sales reports can use the
+-- matching purchase rows by date without uploading purchases every month.
+
+create table if not exists public.item_purchase_imports (
+  id uuid primary key default gen_random_uuid(),
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  source_name text,
+  source_filename text,
+  period_start date not null,
+  period_end date not null,
+  row_count integer not null default 0 check (row_count >= 0),
+  unique_item_count integer not null default 0 check (unique_item_count >= 0),
+  unresolved_count integer not null default 0 check (unresolved_count >= 0),
+  total_purchase_value numeric(18,6) not null default 0,
+  total_equivalent_boxes numeric(18,6) not null default 0,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists item_purchase_imports_branch_created_idx
+  on public.item_purchase_imports(branch_id, created_at desc);
+
+create table if not exists public.item_purchase_rows (
+  id uuid primary key default gen_random_uuid(),
+  import_id uuid not null references public.item_purchase_imports(id) on delete cascade,
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  purchase_date date not null,
+  supplier_name text,
+  invoice_number text,
+  report_name text not null,
+  report_name_norm text not null,
+  item_id uuid references public.item_catalog(id) on delete set null,
+  unit text not null check (unit in ('علبة','فرط')),
+  quantity numeric(16,6) not null default 0,
+  boxes_purchased numeric(16,6) not null default 0,
+  loose_purchased numeric(16,6) not null default 0,
+  units_per_box integer check (units_per_box > 0),
+  equivalent_boxes numeric(18,6),
+  purchase_value numeric(18,6) not null default 0,
+  matched_by text not null default 'unmatched' check (matched_by in ('exact','alias','manual','unmatched')),
+  created_at timestamptz not null default now()
+);
+create index if not exists item_purchase_rows_import_idx on public.item_purchase_rows(import_id);
+create index if not exists item_purchase_rows_branch_date_idx on public.item_purchase_rows(branch_id, purchase_date);
+create index if not exists item_purchase_rows_item_idx on public.item_purchase_rows(item_id);
+create index if not exists item_purchase_rows_unmatched_idx on public.item_purchase_rows(import_id, matched_by);
+
+alter table public.item_purchase_imports enable row level security;
+alter table public.item_purchase_rows enable row level security;
+
+revoke all on table public.item_purchase_imports, public.item_purchase_rows
+  from anon, authenticated;
+
+-- END V72_item_purchase_archive.sql
+
+-- BEGIN V76_user_tasks.sql
+-- V76 - Personal To Do List / Abdo Tasks
+-- Run once in Supabase SQL Editor.
+
+create table if not exists public.tasks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  title text not null check (char_length(trim(title)) >= 2 and char_length(title) <= 180),
+  description text,
+  priority text not null default 'normal' check (priority in ('urgent','important','normal')),
+  status text not null default 'new' check (status in ('new','in_progress','postponed','completed')),
+  due_date date,
+  branch_id uuid references public.branches(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_tasks_user_status_due on public.tasks(user_id, status, due_date);
+create index if not exists idx_tasks_branch on public.tasks(branch_id);
+
+create or replace function public.touch_tasks_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_tasks_updated_at on public.tasks;
+create trigger trg_tasks_updated_at
+before update on public.tasks
+for each row execute function public.touch_tasks_updated_at();
+
+alter table public.tasks enable row level security;
+
+drop policy if exists tasks_select_own on public.tasks;
+create policy tasks_select_own on public.tasks for select using (auth.uid() = user_id);
+
+drop policy if exists tasks_insert_own on public.tasks;
+create policy tasks_insert_own on public.tasks for insert with check (auth.uid() = user_id);
+
+drop policy if exists tasks_update_own on public.tasks;
+create policy tasks_update_own on public.tasks for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists tasks_delete_own on public.tasks;
+create policy tasks_delete_own on public.tasks for delete using (auth.uid() = user_id);
+
+-- END V76_user_tasks.sql
+
+-- BEGIN V78_daily_note_books.sql
+-- V78 - Daily employee/title notes inside Abdo Tasks
+-- Run once in Supabase SQL Editor after V76_user_tasks.sql.
+
+create table if not exists public.daily_note_books (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  title text not null check (char_length(trim(title)) >= 2 and char_length(title) <= 160),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.daily_notes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  book_id uuid not null references public.daily_note_books(id) on delete cascade,
+  note_text text not null check (char_length(trim(note_text)) >= 2 and char_length(note_text) <= 2500),
+  note_date date default current_date,
+  priority text not null default 'normal' check (priority in ('urgent','important','normal')),
+  followed_up boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_daily_note_books_user_updated on public.daily_note_books(user_id, updated_at desc);
+create index if not exists idx_daily_notes_user_book_date on public.daily_notes(user_id, book_id, note_date desc);
+create index if not exists idx_daily_notes_followed_up on public.daily_notes(user_id, followed_up);
+
+create or replace function public.touch_daily_note_books_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_daily_note_books_updated_at on public.daily_note_books;
+create trigger trg_daily_note_books_updated_at
+before update on public.daily_note_books
+for each row execute function public.touch_daily_note_books_updated_at();
+
+create or replace function public.touch_daily_notes_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_daily_notes_updated_at on public.daily_notes;
+create trigger trg_daily_notes_updated_at
+before update on public.daily_notes
+for each row execute function public.touch_daily_notes_updated_at();
+
+alter table public.daily_note_books enable row level security;
+alter table public.daily_notes enable row level security;
+
+drop policy if exists daily_note_books_select_own on public.daily_note_books;
+create policy daily_note_books_select_own on public.daily_note_books for select using (auth.uid() = user_id);
+
+drop policy if exists daily_note_books_insert_own on public.daily_note_books;
+create policy daily_note_books_insert_own on public.daily_note_books for insert with check (auth.uid() = user_id);
+
+drop policy if exists daily_note_books_update_own on public.daily_note_books;
+create policy daily_note_books_update_own on public.daily_note_books for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists daily_note_books_delete_own on public.daily_note_books;
+create policy daily_note_books_delete_own on public.daily_note_books for delete using (auth.uid() = user_id);
+
+drop policy if exists daily_notes_select_own on public.daily_notes;
+create policy daily_notes_select_own on public.daily_notes for select using (auth.uid() = user_id);
+
+drop policy if exists daily_notes_insert_own on public.daily_notes;
+create policy daily_notes_insert_own on public.daily_notes for insert with check (auth.uid() = user_id);
+
+drop policy if exists daily_notes_update_own on public.daily_notes;
+create policy daily_notes_update_own on public.daily_notes for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists daily_notes_delete_own on public.daily_notes;
+create policy daily_notes_delete_own on public.daily_notes for delete using (auth.uid() = user_id);
+
+-- END V78_daily_note_books.sql
+
+-- BEGIN V81_employee_accounts.sql
+-- V81 - Employee payroll/activity cards inside Abdo Tasks
+-- Run once in Supabase SQL Editor after V78_daily_note_books.sql.
+
+create table if not exists public.employee_cards (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  name text not null check (char_length(trim(name)) >= 2 and char_length(name) <= 160),
+  base_salary numeric(14,2) not null default 0 check (base_salary >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (id, user_id)
+);
+
+create table if not exists public.employee_records (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  employee_id uuid not null,
+  record_type text not null check (record_type in ('absence','withdrawal','credit','overtime')),
+  record_date date not null default current_date,
+  quantity numeric(12,2) not null default 0 check (quantity >= 0),
+  amount numeric(14,2) not null default 0 check (amount >= 0),
+  note text check (note is null or char_length(note) <= 1500),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint employee_records_employee_owner_fk foreign key (employee_id, user_id) references public.employee_cards(id, user_id) on delete cascade
+);
+
+create index if not exists idx_employee_cards_user_name on public.employee_cards(user_id, name);
+create index if not exists idx_employee_records_user_employee_date on public.employee_records(user_id, employee_id, record_date desc);
+create index if not exists idx_employee_records_user_type_date on public.employee_records(user_id, record_type, record_date desc);
+
+create or replace function public.touch_employee_cards_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_employee_cards_updated_at on public.employee_cards;
+create trigger trg_employee_cards_updated_at
+before update on public.employee_cards
+for each row execute function public.touch_employee_cards_updated_at();
+
+create or replace function public.touch_employee_records_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_employee_records_updated_at on public.employee_records;
+create trigger trg_employee_records_updated_at
+before update on public.employee_records
+for each row execute function public.touch_employee_records_updated_at();
+
+create or replace function public.touch_employee_card_from_record()
+returns trigger
+language plpgsql
+as $$
+begin
+  if tg_op = 'DELETE' then
+    update public.employee_cards set updated_at = now() where id = old.employee_id;
+  else
+    update public.employee_cards set updated_at = now() where id = new.employee_id;
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_employee_record_touch_parent on public.employee_records;
+create trigger trg_employee_record_touch_parent
+after insert or update or delete on public.employee_records
+for each row execute function public.touch_employee_card_from_record();
+
+alter table public.employee_cards enable row level security;
+alter table public.employee_records enable row level security;
+
+drop policy if exists employee_cards_select_own on public.employee_cards;
+create policy employee_cards_select_own on public.employee_cards for select using (auth.uid() = user_id);
+
+drop policy if exists employee_cards_insert_own on public.employee_cards;
+create policy employee_cards_insert_own on public.employee_cards for insert with check (auth.uid() = user_id);
+
+drop policy if exists employee_cards_update_own on public.employee_cards;
+create policy employee_cards_update_own on public.employee_cards for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists employee_cards_delete_own on public.employee_cards;
+create policy employee_cards_delete_own on public.employee_cards for delete using (auth.uid() = user_id);
+
+drop policy if exists employee_records_select_own on public.employee_records;
+create policy employee_records_select_own on public.employee_records for select using (auth.uid() = user_id);
+
+drop policy if exists employee_records_insert_own on public.employee_records;
+create policy employee_records_insert_own on public.employee_records for insert with check (auth.uid() = user_id);
+
+drop policy if exists employee_records_update_own on public.employee_records;
+create policy employee_records_update_own on public.employee_records for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists employee_records_delete_own on public.employee_records;
+create policy employee_records_delete_own on public.employee_records for delete using (auth.uid() = user_id);
+
+-- END V81_employee_accounts.sql
+
+-- BEGIN V82_employee_notes.sql
+-- V82 - Add dated manual notes to each employee card
+-- Run once after V81_employee_accounts.sql.
+
+alter table public.employee_records
+  drop constraint if exists employee_records_record_type_check;
+
+alter table public.employee_records
+  add constraint employee_records_record_type_check
+  check (record_type in ('absence','withdrawal','credit','overtime','note'));
+
+-- END V82_employee_notes.sql
+
+-- BEGIN V85_repair_hardening.sql
+-- V85 — Repair & hardening release
+-- Run ONCE on an existing V84 database before deploying the V85 application.
+-- Main goals:
+--   1) Stage movement/purchase imports and activate them atomically.
+--   2) Keep the last known-good report visible if a new import fails halfway.
+--   3) Harden newer private tables so the browser cannot access them directly.
+
+-- ---------------------------------------------------------------------------
+-- Atomic item movement imports
+-- ---------------------------------------------------------------------------
+alter table public.item_movement_reports
+  add column if not exists is_current boolean not null default true;
+
+-- V18 used a full UNIQUE constraint, which prevents staging a replacement.
+-- Drop the normal autogenerated name first, then defensively handle databases
+-- where PostgreSQL/older SQL used a different constraint name.
+alter table public.item_movement_reports
+  drop constraint if exists item_movement_reports_branch_id_period_start_period_end_key;
+
+do $$
+declare
+  v_constraint text;
+begin
+  select c.conname
+    into v_constraint
+    from pg_constraint c
+   where c.conrelid = 'public.item_movement_reports'::regclass
+     and c.contype = 'u'
+     and replace(pg_get_constraintdef(c.oid), ' ', '') ilike '%UNIQUE(branch_id,period_start,period_end)%'
+   limit 1;
+  if v_constraint is not null then
+    execute format('alter table public.item_movement_reports drop constraint %I', v_constraint);
+  end if;
+end;
+$$;
+
+create unique index if not exists item_movement_reports_current_period_uidx
+  on public.item_movement_reports(branch_id, period_start, period_end)
+  where is_current;
+
+create index if not exists item_movement_reports_current_branch_period_idx
+  on public.item_movement_reports(branch_id, is_current, period_end desc);
+
+create or replace function public.activate_item_movement_report(p_report_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_branch uuid;
+  v_start date;
+  v_end date;
+begin
+  select branch_id, period_start, period_end
+    into v_branch, v_start, v_end
+    from public.item_movement_reports
+   where id = p_report_id
+   for update;
+
+  if not found then
+    raise exception 'Movement report not found';
+  end if;
+
+  -- The old report remains current until this function runs, so failed uploads
+  -- never remove the last known-good report.
+  update public.item_movement_reports
+     set is_current = false
+   where branch_id = v_branch
+     and period_start = v_start
+     and period_end = v_end
+     and id <> p_report_id
+     and is_current;
+
+  update public.item_movement_reports
+     set is_current = true
+   where id = p_report_id;
+
+  -- Clean the replaced version plus any abandoned staged attempts for the same period.
+  delete from public.item_movement_reports
+   where branch_id = v_branch
+     and period_start = v_start
+     and period_end = v_end
+     and id <> p_report_id
+     and not is_current;
+end;
+$$;
+
+revoke all on function public.activate_item_movement_report(uuid) from public, anon, authenticated;
+grant execute on function public.activate_item_movement_report(uuid) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Atomic purchase archive imports
+-- ---------------------------------------------------------------------------
+alter table public.item_purchase_imports
+  add column if not exists is_current boolean not null default true;
+
+-- Older versions intended one purchase archive per branch. If historical rows
+-- exist, preserve only the newest one as current; older rows stay staged until
+-- the next successful activation cleans them.
+with ranked as (
+  select id,
+         row_number() over (partition by branch_id order by created_at desc, id desc) as rn
+    from public.item_purchase_imports
+)
+update public.item_purchase_imports p
+   set is_current = (r.rn = 1)
+  from ranked r
+ where p.id = r.id;
+
+create unique index if not exists item_purchase_imports_current_branch_uidx
+  on public.item_purchase_imports(branch_id)
+  where is_current;
+
+create index if not exists item_purchase_imports_current_created_idx
+  on public.item_purchase_imports(branch_id, is_current, created_at desc);
+
+create or replace function public.activate_item_purchase_import(p_import_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_branch uuid;
+begin
+  select branch_id
+    into v_branch
+    from public.item_purchase_imports
+   where id = p_import_id
+   for update;
+
+  if not found then
+    raise exception 'Purchase import not found';
+  end if;
+
+  update public.item_purchase_imports
+     set is_current = false
+   where branch_id = v_branch
+     and id <> p_import_id
+     and is_current;
+
+  update public.item_purchase_imports
+     set is_current = true
+   where id = p_import_id;
+
+  -- Remove the replaced archive and any abandoned staged uploads for this branch.
+  delete from public.item_purchase_imports
+   where branch_id = v_branch
+     and id <> p_import_id
+     and not is_current;
+end;
+$$;
+
+revoke all on function public.activate_item_purchase_import(uuid) from public, anon, authenticated;
+grant execute on function public.activate_item_purchase_import(uuid) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Harden tables introduced after the original schema snapshot.
+-- The application talks to Supabase through FastAPI/service_role only.
+-- ---------------------------------------------------------------------------
+alter table if exists public.report_drafts enable row level security;
+alter table if exists public.supplier_external_balances enable row level security;
+alter table if exists public.item_purchase_imports enable row level security;
+alter table if exists public.item_purchase_rows enable row level security;
+alter table if exists public.tasks enable row level security;
+alter table if exists public.daily_note_books enable row level security;
+alter table if exists public.daily_notes enable row level security;
+alter table if exists public.employee_cards enable row level security;
+alter table if exists public.employee_records enable row level security;
+
+revoke all on table public.report_drafts,
+  public.supplier_external_balances,
+  public.item_purchase_imports,
+  public.item_purchase_rows,
+  public.tasks,
+  public.daily_note_books,
+  public.daily_notes,
+  public.employee_cards,
+  public.employee_records
+from anon, authenticated;
+
+-- END V85_repair_hardening.sql

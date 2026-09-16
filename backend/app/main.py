@@ -5,10 +5,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .core import FRONTEND, close_http_client
+from .core import APP_VERSION, FRONTEND, close_http_client
 from .routers import admin, auth, dashboard, doctor_sales, invoices, item_movements, item_purchases, items, notifications, payment_plans, payments, shortages, suppliers, report_drafts, tasks
 
-app = FastAPI(title="Abdo Debts API", version="78.0.0")
+app = FastAPI(title="Abdo Debts API", version=APP_VERSION)
 
 allowed_origins = [x.strip() for x in os.getenv("ALLOWED_ORIGINS", "").split(",") if x.strip()]
 if allowed_origins:

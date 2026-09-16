@@ -108,24 +108,74 @@ async def list_users(profile: dict[str, Any] = Depends(current_profile)) -> Any:
     rows = await sb("GET", "/rest/v1/profiles", service=True, params={
         "select": "id,username,full_name,role,active,permissions,all_branches,created_at,profile_branches(branch_id,branches(name))", "order": "created_at.desc", "limit": "1000"
     })
+    visible = []
     for row in rows or []:
-        row["branch_ids"] = [x.get("branch_id") for x in row.get("profile_branches") or []]
+        row["branch_ids"] = [x.get("branch_id") for x in row.get("profile_branches") or [] if x.get("branch_id")]
         row["effective_permissions"] = effective_permissions(row)
-    return rows
+        if _can_manage_target(profile, row, allow_self=True):
+            visible.append(row)
+    return visible
+
 
 async def _replace_user_branches(user_id: str, branch_ids: list[str]) -> None:
     await sb("DELETE", "/rest/v1/profile_branches", service=True, params={"profile_id": f"eq.{user_id}"})
     if branch_ids:
         await sb("POST", "/rest/v1/profile_branches", service=True, json=[{"profile_id": user_id, "branch_id": bid} for bid in list(dict.fromkeys(branch_ids))])
 
+
+def _can_manage_target(actor: dict[str, Any], target: dict[str, Any], *, allow_self: bool = False) -> bool:
+    if target.get("id") == actor.get("id"):
+        # Only a real admin may edit their own privileged profile through the
+        # user-management API. Delegated managers cannot reshape their own scope.
+        return allow_self and actor.get("role") == "admin"
+    if actor.get("role") == "admin":
+        return True
+    target_perms = effective_permissions(target)
+    if target.get("role") == "admin" or target.get("all_branches") or target_perms.get("manage_users") or target_perms.get("manage_branches"):
+        return False
+    actor_scope = branch_ids_for(actor)
+    if actor_scope is None:
+        return True
+    target_scope = set(target.get("branch_ids") or [x.get("branch_id") for x in target.get("profile_branches") or [] if x.get("branch_id")])
+    return target_scope.issubset(actor_scope)
+
+
+async def _target_user(user_id: str) -> dict[str, Any]:
+    rows = await sb("GET", "/rest/v1/profiles", service=True, params={
+        "select": "id,role,all_branches,permissions,profile_branches(branch_id)",
+        "id": f"eq.{user_id}", "limit": "1",
+    })
+    if not rows:
+        raise HTTPException(404, "المستخدم غير موجود")
+    row = rows[0]
+    row["branch_ids"] = [x.get("branch_id") for x in row.get("profile_branches") or [] if x.get("branch_id")]
+    return row
+
+
 def _validate_user_scope(actor: dict[str, Any], *, role: str, all_branches: bool, branch_ids: list[str]) -> None:
+    if role == "admin" and actor.get("role") != "admin":
+        raise HTTPException(403, "لا يمكنك منح دور المدير")
+    if all_branches and actor.get("role") != "admin":
+        raise HTTPException(403, "لا يمكنك منح صلاحية كل الفروع")
     actor_scope = branch_ids_for(actor)
     if actor_scope is not None:
-        if all_branches or role == "admin":
-            raise HTTPException(403, "لا يمكنك منح صلاحية كل الفروع أو دور المدير")
         requested = set(branch_ids)
         if not requested.issubset(actor_scope):
             raise HTTPException(403, "لا يمكنك منح فروع خارج نطاقك")
+
+
+def _clean_user_permissions(actor: dict[str, Any], requested: dict[str, bool]) -> dict[str, bool]:
+    clean = {k: bool(v) for k, v in requested.items() if k in PERMISSION_KEYS}
+    if actor.get("role") == "admin":
+        return clean
+    actor_perms = effective_permissions(actor)
+    protected = {"manage_users", "manage_branches"}
+    for key, enabled in clean.items():
+        if not enabled:
+            continue
+        if key in protected or not actor_perms.get(key, False):
+            raise HTTPException(403, "لا يمكنك منح صلاحية أعلى من صلاحياتك")
+    return clean
 
 
 @router.post("/users")
@@ -142,7 +192,7 @@ async def create_user(data: UserCreateInput, profile: dict[str, Any] = Depends(c
         "user_metadata": {"username": username, "full_name": data.full_name.strip()},
     })
     uid = auth_user["id"]
-    clean_permissions = {k: bool(v) for k, v in data.permissions.items() if k in PERMISSION_KEYS}
+    clean_permissions = _clean_user_permissions(profile, data.permissions)
     try:
         rows = await sb("POST", "/rest/v1/profiles", service=True, headers={"Prefer": "return=representation"}, json={
             "id": uid, "username": username, "full_name": data.full_name.strip(), "role": data.role,
@@ -160,6 +210,9 @@ async def create_user(data: UserCreateInput, profile: dict[str, Any] = Depends(c
 async def update_user(user_id: str, data: UserUpdateInput, profile: dict[str, Any] = Depends(current_profile)) -> Any:
     require_permission(profile, "manage_users")
     require_service_key()
+    target = await _target_user(user_id)
+    if not _can_manage_target(profile, target, allow_self=True):
+        raise HTTPException(403, "لا يمكنك تعديل هذا المستخدم")
     _validate_user_scope(profile, role=data.role, all_branches=data.all_branches, branch_ids=data.branch_ids)
     username = data.username.strip().lower()
     existing = await sb("GET", "/rest/v1/profiles", service=True, params={"select": "id", "username": f"eq.{username}", "id": f"neq.{user_id}", "limit": "1"})
@@ -169,7 +222,7 @@ async def update_user(user_id: str, data: UserUpdateInput, profile: dict[str, An
     if data.password:
         auth_payload["password"] = data.password
     await sb("PUT", f"/auth/v1/admin/users/{user_id}", service=True, json=auth_payload)
-    clean_permissions = {k: bool(v) for k, v in data.permissions.items() if k in PERMISSION_KEYS}
+    clean_permissions = _clean_user_permissions(profile, data.permissions)
     all_branches = bool(data.all_branches or data.role == "admin")
     rows = await sb("PATCH", "/rest/v1/profiles", service=True, headers={"Prefer": "return=representation"}, params={"id": f"eq.{user_id}"}, json={
         "username": username, "full_name": data.full_name.strip(), "role": data.role, "active": data.active,
@@ -185,6 +238,9 @@ async def delete_user(user_id: str, profile: dict[str, Any] = Depends(current_pr
     require_service_key()
     if user_id == profile["id"]:
         raise HTTPException(422, "لا يمكنك حذف حسابك الحالي")
+    target = await _target_user(user_id)
+    if not _can_manage_target(profile, target):
+        raise HTTPException(403, "لا يمكنك حذف هذا المستخدم")
     # Keep financial history referentially safe; creator columns are ON DELETE SET NULL.
     await sb("DELETE", "/rest/v1/profiles", service=True, params={"id": f"eq.{user_id}"})
     await sb("DELETE", f"/auth/v1/admin/users/{user_id}", service=True)

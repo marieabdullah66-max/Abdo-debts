@@ -283,12 +283,8 @@ def _purchase_lines_from_client(raw_lines: list[dict[str, Any]]) -> list[dict[st
 
 
 async def _create_purchase_archive(branch_id: str, meta: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
-    existing = await sb(
-        "GET", "/rest/v1/item_purchase_imports", service=True,
-        params={"select": "id", "branch_id": f"eq.{branch_id}", "limit": "100"},
-    )
-    for old in existing or []:
-        await sb("DELETE", "/rest/v1/item_purchase_imports", service=True, params={"id": f"eq.{old['id']}"})
+    # V85: create a staged archive. The previous current archive remains visible
+    # until /chunk/finish successfully activates this one.
     period_start = _text(meta.get("period_start")) or date.today().isoformat()
     period_end = _text(meta.get("period_end")) or period_start
     created = await sb(
@@ -306,6 +302,7 @@ async def _create_purchase_archive(branch_id: str, meta: dict[str, Any], profile
             "total_purchase_value": float(meta.get("total_purchase_value") or 0),
             "total_equivalent_boxes": float(meta.get("total_equivalent_boxes") or 0),
             "created_by": profile["id"],
+            "is_current": False,
         },
     )
     return created[0]
@@ -337,13 +334,6 @@ async def import_purchase_archive(
     require_branch_access(profile, branch_id)
     parsed = await _parse_purchase_file(file)
 
-    existing = await sb(
-        "GET", "/rest/v1/item_purchase_imports", service=True,
-        params={"select": "id", "branch_id": f"eq.{branch_id}", "limit": "100"},
-    )
-    for old in existing or []:
-        await sb("DELETE", "/rest/v1/item_purchase_imports", service=True, params={"id": f"eq.{old['id']}"})
-
     created = await sb(
         "POST", "/rest/v1/item_purchase_imports", service=True,
         headers={"Prefer": "return=representation"},
@@ -359,12 +349,24 @@ async def import_purchase_archive(
             "total_purchase_value": parsed["total_purchase_value"],
             "total_equivalent_boxes": parsed["total_equivalent_boxes"],
             "created_by": profile["id"],
+            "is_current": False,
         },
     )
     archive = created[0]
-    payload = _purchase_insert_payload(parsed["rows"], archive["id"], branch_id)
-    for start in range(0, len(payload), 400):
-        await sb("POST", "/rest/v1/item_purchase_rows", service=True, headers={"Prefer": "return=minimal"}, json=payload[start:start + 400])
+    try:
+        payload = _purchase_insert_payload(parsed["rows"], archive["id"], branch_id)
+        for start in range(0, len(payload), 400):
+            await sb("POST", "/rest/v1/item_purchase_rows", service=True, headers={"Prefer": "return=minimal"}, json=payload[start:start + 400])
+        await sb(
+            "POST", "/rest/v1/rpc/activate_item_purchase_import", service=True,
+            json={"p_import_id": archive["id"]},
+        )
+    except Exception:
+        try:
+            await sb("DELETE", "/rest/v1/item_purchase_imports", service=True, params={"id": f"eq.{archive['id']}"})
+        except Exception:
+            pass
+        raise
     return {"ok": True, "archive_id": archive["id"], **{k: v for k, v in parsed.items() if k != "rows"}}
 
 
@@ -389,7 +391,7 @@ async def import_purchase_archive_chunk_rows(payload: dict[str, Any] = Body(...)
     require_branch_access(profile, branch_id)
     archives = await sb(
         "GET", "/rest/v1/item_purchase_imports", service=True,
-        params={"select": "id,branch_id", "id": f"eq.{archive_id}", "branch_id": f"eq.{branch_id}", "limit": "1"},
+        params={"select": "id,branch_id", "id": f"eq.{archive_id}", "branch_id": f"eq.{branch_id}", "is_current": "eq.false", "limit": "1"},
     )
     if not archives:
         raise HTTPException(404, "أرشيف المشتريات غير موجود")
@@ -413,7 +415,7 @@ async def finish_purchase_archive_chunked(payload: dict[str, Any] = Body(...), p
     require_branch_access(profile, branch_id)
     archives = await sb(
         "GET", "/rest/v1/item_purchase_imports", service=True,
-        params={"select": "id,branch_id", "id": f"eq.{archive_id}", "branch_id": f"eq.{branch_id}", "limit": "1"},
+        params={"select": "id,branch_id", "id": f"eq.{archive_id}", "branch_id": f"eq.{branch_id}", "is_current": "eq.false", "limit": "1"},
     )
     if not archives:
         raise HTTPException(404, "أرشيف المشتريات غير موجود")
@@ -444,6 +446,10 @@ async def finish_purchase_archive_chunked(payload: dict[str, Any] = Body(...), p
             "total_equivalent_boxes": stats["total_equivalent_boxes"],
         },
     )
+    await sb(
+        "POST", "/rest/v1/rpc/activate_item_purchase_import", service=True,
+        json={"p_import_id": archive_id},
+    )
     return {"ok": True, "archive_id": archive_id, **stats}
 
 
@@ -452,6 +458,7 @@ async def purchase_archive(branch_id: str | None = None, profile: dict[str, Any]
     require_permission(profile, "view_item_analysis")
     params: dict[str, str] = {
         "select": "id,branch_id,source_name,source_filename,period_start,period_end,row_count,unique_item_count,unresolved_count,total_purchase_value,total_equivalent_boxes,created_at,branches(name)",
+        "is_current": "eq.true",
         "order": "created_at.desc", "limit": "20",
     }
     params = apply_branch_filter(params, profile)
@@ -494,7 +501,7 @@ async def purchase_summary(
 
     archives = await sb(
         "GET", "/rest/v1/item_purchase_imports", service=True,
-        params={"select": "id,period_start,period_end,row_count,unique_item_count,unresolved_count,total_equivalent_boxes", "branch_id": f"eq.{branch_id}", "order": "created_at.desc", "limit": "1"},
+        params={"select": "id,period_start,period_end,row_count,unique_item_count,unresolved_count,total_equivalent_boxes", "branch_id": f"eq.{branch_id}", "is_current": "eq.true", "order": "created_at.desc", "limit": "1"},
     )
     if not archives:
         return {"archive": None, "summary": {"row_count": 0, "unique_item_count": 0, "total_equivalent_boxes": 0, "total_purchase_value": 0}, "rows": []}

@@ -193,6 +193,89 @@ async def _external_balances(branch_id: str | None, profile: dict[str, Any]) -> 
         raise
 
 
+
+
+def _supplier_financial_maps(
+    invoice_rows: list[dict[str, Any]],
+    external_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build one signed supplier balance model across imported and normal invoices.
+
+    Public/UI convention is intentionally signed:
+      + positive = debt for us (supplier owes us)
+      - negative = debt on us (we owe supplier)
+
+    Normal invoice balances are amounts *we owe*, therefore they subtract from
+    the signed balance. Imported negative balances are represented by the
+    opening invoice created during import, so they must not be counted twice.
+    Imported positive balances have no invoice equivalent and are kept as the
+    positive baseline.
+    """
+    invoice_balance_by_pair: dict[tuple[str, str], float] = {}
+    invoice_count_by_pair: dict[tuple[str, str], int] = {}
+    oldest_open_by_pair: dict[tuple[str, str], date] = {}
+    for inv in invoice_rows or []:
+        sid = str(inv.get("supplier_id") or "")
+        bid = str(inv.get("branch_id") or "")
+        if not sid or not bid:
+            continue
+        key = (sid, bid)
+        amount = max(0.0, float(inv.get("balance") or 0))
+        invoice_balance_by_pair[key] = invoice_balance_by_pair.get(key, 0.0) + amount
+        invoice_count_by_pair[key] = invoice_count_by_pair.get(key, 0) + 1
+        if amount <= 0 or not inv.get("invoice_date"):
+            continue
+        try:
+            invoice_date = date.fromisoformat(str(inv.get("invoice_date")))
+        except ValueError:
+            continue
+        previous = oldest_open_by_pair.get(key)
+        if previous is None or invoice_date < previous:
+            oldest_open_by_pair[key] = invoice_date
+
+    external_by_pair: dict[tuple[str, str], dict[str, Any]] = {}
+    for ext in external_rows or []:
+        sid = str(ext.get("supplier_id") or "")
+        bid = str(ext.get("branch_id") or "")
+        if sid and bid:
+            external_by_pair[(sid, bid)] = ext
+
+    pairs = set(invoice_balance_by_pair) | set(external_by_pair)
+    signed_by_pair: dict[tuple[str, str], float] = {}
+    for key in pairs:
+        ext = external_by_pair.get(key) or {}
+        external_signed = round(float(ext.get("signed_balance") or 0), 2)
+        invoice_total = round(invoice_balance_by_pair.get(key, 0.0), 2)
+        invoice_count = invoice_count_by_pair.get(key, 0)
+        if external_signed > 0:
+            # Positive imported balance is money owed to us; later/open invoices
+            # offset that receivable because invoices are money we owe.
+            current = external_signed - invoice_total
+        elif invoice_count:
+            # Negative imported balances are already represented by the opening
+            # invoice. Payments reduce invoice_total automatically.
+            current = -invoice_total
+        else:
+            # Compatibility fallback for an older/partial import that has an
+            # external negative balance but no opening invoice row.
+            current = external_signed
+        signed_by_pair[key] = round(current, 2)
+
+    return {
+        "signed_by_pair": signed_by_pair,
+        "external_by_pair": external_by_pair,
+        "oldest_open_by_pair": oldest_open_by_pair,
+        "invoice_balance_by_pair": invoice_balance_by_pair,
+    }
+
+
+def _supplier_signed_totals(financials: dict[str, Any]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for (supplier_id, _branch_id), amount in (financials.get("signed_by_pair") or {}).items():
+        totals[supplier_id] = round(totals.get(supplier_id, 0.0) + float(amount or 0), 2)
+    return totals
+
+
 async def _upsert_external_balance(*, supplier_id: str, branch_id: str, signed_balance: float, row: SupplierImportRowInput, profile: dict[str, Any]) -> None:
     payload = {
         "supplier_id": supplier_id,
@@ -326,6 +409,17 @@ async def import_suppliers(data: SupplierImportInput, profile: dict[str, Any] = 
     skipped = 0
     imported_rows = []
 
+    # A supplier debt import is a branch-level financial snapshot. Re-importing
+    # over an existing snapshot can duplicate the opening invoices and corrupt
+    # balances. The UI already provides "حذف قيم الفرع" for this workflow, so
+    # fail safely before writing anything when a previous snapshot exists.
+    previous_snapshot = await _external_balances(data.branch_id, profile)
+    if previous_snapshot:
+        raise HTTPException(
+            409,
+            "يوجد استيراد أرصدة سابق لهذا الفرع. استخدم «حذف قيم الفرع» أولًا ثم استورد الملف الجديد حتى لا تتكرر الأرصدة.",
+        )
+
     for idx, row in enumerate(data.rows, start=1):
         if not row.include:
             skipped += 1
@@ -454,75 +548,53 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
 
     safe = (q or "").strip().replace("%", "")[:80]
 
-    # Fast path for supplier page with balance by selected branch.
-    # Vercel can timeout when we fetch all suppliers/categories/all invoice balances first.
-    # Here we scope everything to the requested branch and, when external signed balances exist,
-    # we use them as the source of truth instead of recalculating thousands of invoice rows.
+    # Fast path for a selected branch. Always load invoice balances even when an
+    # imported signed snapshot exists: invoice balances are what make new manual
+    # suppliers visible and make payments immediately reduce "دين علينا".
     if include_balance and branch_id:
         require_branch_access(profile, branch_id)
+        invoice_rows = await sb("GET", "/rest/v1/invoice_balances", service=True, params={
+            "select": "supplier_id,branch_id,balance,invoice_date",
+            "branch_id": f"eq.{branch_id}",
+            "limit": "10000",
+        }) or []
         external_rows = await _external_balances(branch_id, profile)
-        use_external = bool(external_rows)
+        financials = _supplier_financial_maps(invoice_rows, external_rows)
+        pair_balances = financials["signed_by_pair"]
+        external_by_pair = financials["external_by_pair"]
+        oldest_by_pair = financials["oldest_open_by_pair"]
 
-        invoice_rows: list[dict[str, Any]] = []
-        if not use_external:
-            invoice_rows = await sb("GET", "/rest/v1/invoice_balances", service=True, params={
-                "select": "supplier_id,branch_id,balance,invoice_date",
-                "branch_id": f"eq.{branch_id}",
-                "limit": "10000",
-            }) or []
-
-        supplier_ids: set[str] = set()
-        for row in external_rows or []:
-            if row.get("supplier_id"):
-                supplier_ids.add(row["supplier_id"])
-        for row in invoice_rows or []:
-            if row.get("supplier_id"):
-                supplier_ids.add(row["supplier_id"])
-
+        supplier_ids = sorted({sid for sid, bid in pair_balances if bid == branch_id})
         if not supplier_ids:
             return []
 
         suppliers: list[dict[str, Any]] = []
         base_select = "id,name,phone,notes,active,created_at"
-        for ids in _chunks(sorted(supplier_ids), 120):
-            params = {"select": base_select, "active": "eq.true", "id": f"in.({','.join(ids)})", "order": "name.asc", "limit": str(max(200, len(ids)))}
+        for ids in _chunks(supplier_ids, 120):
+            params = {
+                "select": base_select,
+                "active": "eq.true",
+                "id": f"in.({','.join(ids)})",
+                "order": "name.asc",
+                "limit": str(max(200, len(ids))),
+            }
             if safe:
                 params["name"] = f"ilike.*{safe}*"
             suppliers.extend(await sb("GET", "/rest/v1/suppliers", service=True, params=params) or [])
 
         supplier_ids_loaded = [row.get("id") for row in suppliers if row.get("id")]
         categories_by_supplier = await _category_map(supplier_ids_loaded)
-
         branch_rows = await sb("GET", "/rest/v1/branches", service=True, params={"select": "id,name", "id": f"eq.{branch_id}", "limit": "1"})
         branch_name = (branch_rows[0] or {}).get("name") if branch_rows else "فرع غير معروف"
-
-        external_by_supplier: dict[str, dict[str, Any]] = {row.get("supplier_id"): row for row in external_rows if row.get("supplier_id")}
-        balances: dict[str, float] = {}
-        oldest_open_invoice: dict[str, date] = {}
         today = date.today()
-        for inv in invoice_rows or []:
-            sid = inv.get("supplier_id")
-            if not sid:
-                continue
-            balance = float(inv.get("balance") or 0)
-            balances[sid] = balances.get(sid, 0.0) + balance
-            if balance <= 0 or not inv.get("invoice_date"):
-                continue
-            try:
-                invoice_date = date.fromisoformat(str(inv.get("invoice_date")))
-            except ValueError:
-                continue
-            previous = oldest_open_invoice.get(sid)
-            if previous is None or invoice_date < previous:
-                oldest_open_invoice[sid] = invoice_date
-
         rows = []
         for supplier in suppliers:
-            sid = supplier.get("id")
-            external = external_by_supplier.get(sid) or {}
-            signed_balance = round(float(external.get("signed_balance") if external else balances.get(sid, 0.0) or 0.0), 2)
-            oldest = oldest_open_invoice.get(sid)
-            if not oldest and external.get("last_invoice_date"):
+            sid = str(supplier.get("id") or "")
+            key = (sid, branch_id)
+            external = external_by_pair.get(key) or {}
+            signed_balance = round(float(pair_balances.get(key, 0.0) or 0.0), 2)
+            oldest = oldest_by_pair.get(key)
+            if not oldest and signed_balance < 0 and external.get("last_invoice_date"):
                 try:
                     oldest = date.fromisoformat(str(external.get("last_invoice_date")))
                 except ValueError:
@@ -539,7 +611,7 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
                 "aging_days": max(0, (today - oldest).days) if oldest and signed_balance < 0 else None,
                 "oldest_open_invoice_date": oldest.isoformat() if oldest else None,
             })
-        rows.sort(key=lambda x: (str(x.get("name") or "").lower()))
+        rows.sort(key=lambda x: str(x.get("name") or "").lower())
         return rows
 
     params = {"select": "id,name,phone,notes,active,created_at", "active": "eq.true", "order": "name.asc", "limit": "5000"}
@@ -557,67 +629,67 @@ async def list_suppliers(q: str | None = None, branch_id: str | None = None, inc
     if branch_id:
         require_branch_access(profile, branch_id)
         inv_params["branch_id"] = f"eq.{branch_id}"
-    invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=inv_params)
+    invoices = await sb("GET", "/rest/v1/invoice_balances", service=True, params=inv_params) or []
     external_rows = await _external_balances(branch_id, profile)
-    external_by_supplier: dict[str, dict[str, Any]] = {row.get("supplier_id"): row for row in external_rows if row.get("supplier_id")}
+    financials = _supplier_financial_maps(invoices, external_rows)
+    pair_balances: dict[tuple[str, str], float] = financials["signed_by_pair"]
+    external_by_pair: dict[tuple[str, str], dict[str, Any]] = financials["external_by_pair"]
+    oldest_by_pair: dict[tuple[str, str], date] = financials["oldest_open_by_pair"]
+    totals_by_supplier = _supplier_signed_totals(financials)
 
-    balances: dict[str, float] = {}
-    oldest_open_invoice: dict[str, date] = {}
-    suppliers_in_branch: set[str] = set()
     supplier_branch_ids: dict[str, set[str]] = {}
-    for inv in invoices or []:
-        sid = inv.get("supplier_id")
-        if not sid:
-            continue
-        bid = inv.get("branch_id")
-        suppliers_in_branch.add(sid)
-        if bid:
-            supplier_branch_ids.setdefault(sid, set()).add(bid)
-        balance = float(inv.get("balance") or 0)
-        balances[sid] = balances.get(sid, 0.0) + balance
-        if balance <= 0 or not inv.get("invoice_date"):
-            continue
-        try:
-            invoice_date = date.fromisoformat(str(inv.get("invoice_date")))
-        except ValueError:
-            continue
-        previous = oldest_open_invoice.get(sid)
-        if previous is None or invoice_date < previous:
-            oldest_open_invoice[sid] = invoice_date
+    for sid, bid in pair_balances:
+        supplier_branch_ids.setdefault(sid, set()).add(bid)
 
-    for ext in external_rows or []:
-        sid = ext.get("supplier_id")
-        bid = ext.get("branch_id")
-        if sid:
-            suppliers_in_branch.add(sid)
-            if bid:
-                supplier_branch_ids.setdefault(sid, set()).add(bid)
     branch_rows = await sb("GET", "/rest/v1/branches", service=True, params={"select": "id,name", "active": "eq.true", "limit": "1000"})
-    branch_name_by_id = {row.get("id"): row.get("name") for row in (branch_rows or []) if row.get("id")}
+    branch_name_by_id = {str(row.get("id")): row.get("name") for row in (branch_rows or []) if row.get("id")}
     today = date.today()
     rows = []
     for supplier in suppliers or []:
-        if branch_id and supplier.get("id") not in suppliers_in_branch:
+        sid = str(supplier.get("id") or "")
+        branch_ids = supplier_branch_ids.get(sid, set())
+        if branch_id and branch_id not in branch_ids:
             continue
-        external = external_by_supplier.get(supplier.get("id")) or {}
-        signed_balance = round(float(external.get("signed_balance") if external else balances.get(supplier.get("id"), 0.0) or 0.0), 2)
+
+        if branch_id:
+            signed_balance = round(float(pair_balances.get((sid, branch_id), 0.0) or 0.0), 2)
+            relevant_pairs = [(sid, branch_id)]
+        else:
+            signed_balance = round(float(totals_by_supplier.get(sid, 0.0) or 0.0), 2)
+            relevant_pairs = [(sid, bid) for bid in branch_ids]
+
+        oldest_candidates = [oldest_by_pair[pair] for pair in relevant_pairs if pair in oldest_by_pair]
+        oldest = min(oldest_candidates) if oldest_candidates else None
+        if not oldest and signed_balance < 0:
+            imported_dates = []
+            for pair in relevant_pairs:
+                raw = (external_by_pair.get(pair) or {}).get("last_invoice_date")
+                if not raw:
+                    continue
+                try:
+                    imported_dates.append(date.fromisoformat(str(raw)))
+                except ValueError:
+                    pass
+            if imported_dates:
+                oldest = min(imported_dates)
+
+        references = [
+            str((external_by_pair.get(pair) or {}).get("reference_no") or "").strip()
+            for pair in relevant_pairs
+            if (external_by_pair.get(pair) or {}).get("reference_no")
+        ]
+        sorted_branch_ids = sorted(branch_ids, key=lambda bid: branch_name_by_id.get(bid, ""))
         rows.append({
             **supplier,
             "categories": categories_by_supplier.get(supplier.get("id"), []),
             "balance": signed_balance,
             "debt_state": _debt_state(signed_balance),
             "debt_label": "دين لنا" if signed_balance > 0 else ("دين علينا" if signed_balance < 0 else "بدون دين"),
-            "import_reference_no": external.get("reference_no"),
-            "branch_ids": sorted(list(supplier_branch_ids.get(supplier.get("id"), set())), key=lambda bid: branch_name_by_id.get(bid, "")),
-            "branch_names": [branch_name_by_id.get(bid, "فرع غير معروف") for bid in sorted(list(supplier_branch_ids.get(supplier.get("id"), set())), key=lambda bid: branch_name_by_id.get(bid, ""))],
-            "aging_days": (
-                max(0, (today - oldest_open_invoice[supplier.get("id")]).days)
-                if supplier.get("id") in oldest_open_invoice else None
-            ),
-            "oldest_open_invoice_date": (
-                oldest_open_invoice[supplier.get("id")].isoformat()
-                if supplier.get("id") in oldest_open_invoice else None
-            ),
+            "import_reference_no": references[0] if len(set(references)) == 1 and references else None,
+            "branch_ids": sorted_branch_ids,
+            "branch_names": [branch_name_by_id.get(bid, "فرع غير معروف") for bid in sorted_branch_ids],
+            "aging_days": max(0, (today - oldest).days) if oldest and signed_balance < 0 else None,
+            "oldest_open_invoice_date": oldest.isoformat() if oldest else None,
         })
     return rows
 
